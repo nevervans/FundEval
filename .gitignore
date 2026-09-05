@@ -1,0 +1,15 @@
+*.duckdb
+*.duckdb.wal
+.venv/
+venv/
+source/
+Source/
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+*.log
+*.log.txt
+.vscode/
+.idea/
+.env
