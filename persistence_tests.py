@@ -162,7 +162,8 @@ def main():
           "treat this as a headline, not the full picture. Per-year version below.")
     per_year_rho = df.groupby("formation_fy").apply(
         lambda g: pd.Series(stats.spearmanr(g["formation_val"], g["holding_val"]),
-                             index=["rho", "p"]) if len(g) >= 10 else pd.Series([np.nan, np.nan], index=["rho", "p"]))
+                             index=["rho", "p"]) if len(g) >= 10 else pd.Series([np.nan, np.nan], index=["rho", "p"]),
+        include_groups=False)
     print(per_year_rho.round(4).to_string())
 
     con.close()
