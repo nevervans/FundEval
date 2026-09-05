@@ -206,7 +206,7 @@ def build_panel(con, wins):
                 ASOF LEFT JOIN nav_fund n
                   ON a.fund_id = n.fund_id AND a.sd >= n.d
             ),
-            denom AS (SELECT max(n_obs) AS m FROM agg),
+            denom AS (SELECT median(n_obs) AS m FROM agg),
             calc AS (
                 SELECT x.*,
                        date_diff('day', x.anchor_date, DATE '{sd}')          AS gap,
@@ -219,7 +219,7 @@ def build_panel(con, wins):
                 DATE '{sd}', DATE '{ed}',
                 c.anchor_date, c.anchor_nav, c.gap,
                 c.last_date, c.last_nav,
-                c.n_obs, c.n_obs::DOUBLE / nullif(d.m, 0),
+                c.n_obs, LEAST(c.n_obs::DOUBLE / nullif(d.m, 0), 1.0),
                 c.ret,
                 CASE WHEN c.yrs > 0.5 AND 1.0 + c.ret > 0
                      THEN pow(1.0 + c.ret, 1.0 / c.yrs) - 1.0 END,
