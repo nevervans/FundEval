@@ -38,6 +38,7 @@ import pandas as pd
 
 HORIZONS = {"1y": 1, "3y": 3, "5y": 5, "10y": 10}
 ANCHOR_TOLERANCE_DAYS = 45
+STALE_TOLERANCE_DAYS = 15  # matches returns_panel.py's END_TOL_DAYS "survived" convention
 TRADING_DAYS_PER_YEAR = 252
 
 
@@ -104,6 +105,7 @@ def fund_window(con: duckdb.DuckDBPyConnection, fund_id: str, asof: dt.date, yea
     ).fetchone()
     ann_vol, n_obs = vol_row
 
+    stale_days = (asof - last_date).days
     return {
         "window_return": last_nav / anchor_nav - 1,
         "ann_vol": ann_vol,
@@ -111,36 +113,51 @@ def fund_window(con: duckdb.DuckDBPyConnection, fund_id: str, asof: dt.date, yea
         "anchor_date": anchor_date,
         "last_date": last_date,
         "gap_days": gap_days,
+        "stale_days": stale_days,
+        "is_stale": stale_days > STALE_TOLERANCE_DAYS,
     }
 
 
 def category_snapshot(con: duckdb.DuckDBPyConnection, category: str, asof: dt.date, years: float) -> pd.DataFrame:
     """Trailing return for every fund in `category`, in ONE set-based query
     (ASOF join), not a per-fund loop -- this is what makes category average
-    and rank cheap even across a category with hundreds of funds."""
+    and rank cheap even across a category with hundreds of funds.
+
+    DuckDB's ASOF JOIN needs a genuine column-to-column inequality; a bound
+    parameter on the right of `<=` doesn't qualify (raises "Missing ASOF
+    JOIN inequality"). Peers are cross-joined against a one-row params CTE
+    so each peer carries its own asof_date/anchor_target column instead."""
     anchor_target = asof - dt.timedelta(days=round(years * 365.25))
 
     df = con.execute(
         """
-        WITH peers AS (
+        WITH params AS (
+            SELECT CAST(? AS DATE) AS asof_date, CAST(? AS DATE) AS anchor_target
+        ),
+        peers AS (
             SELECT fund_id FROM fund_map WHERE category = ?
         ),
+        peers_p AS (
+            SELECT p.fund_id, pr.asof_date, pr.anchor_target
+            FROM peers p CROSS JOIN params pr
+        ),
         last_pt AS (
-            SELECT p.fund_id, n.d AS last_date, n.nav AS last_nav
-            FROM peers p
-            ASOF LEFT JOIN nav_fund n ON p.fund_id = n.fund_id AND n.d <= ?
+            SELECT pp.fund_id, pp.asof_date, n.d AS last_date, n.nav AS last_nav
+            FROM peers_p pp
+            ASOF LEFT JOIN nav_fund n ON pp.fund_id = n.fund_id AND n.d <= pp.asof_date
         ),
         anchor_pt AS (
-            SELECT p.fund_id, n.d AS anchor_date, n.nav AS anchor_nav
-            FROM peers p
-            ASOF LEFT JOIN nav_fund n ON p.fund_id = n.fund_id AND n.d <= ?
+            SELECT pp.fund_id, n.d AS anchor_date, n.nav AS anchor_nav
+            FROM peers_p pp
+            ASOF LEFT JOIN nav_fund n ON pp.fund_id = n.fund_id AND n.d <= pp.anchor_target
         )
-        SELECT l.fund_id, l.last_nav / a.anchor_nav - 1 AS window_return
+        SELECT l.fund_id, l.last_nav / a.anchor_nav - 1 AS window_return,
+               date_diff('day', l.last_date, l.asof_date) AS stale_days
         FROM last_pt l JOIN anchor_pt a USING (fund_id)
         WHERE l.last_nav IS NOT NULL AND a.anchor_nav IS NOT NULL
-          AND abs(date_diff('day', a.anchor_date, DATE ?)) <= ?
+          AND abs(date_diff('day', a.anchor_date, CAST(? AS DATE))) <= ?
         """,
-        [category, asof, anchor_target, anchor_target, ANCHOR_TOLERANCE_DAYS],
+        [asof, anchor_target, category, anchor_target, ANCHOR_TOLERANCE_DAYS],
     ).df()
     return df
 
@@ -189,6 +206,10 @@ def main():
     print("=" * 78)
     print(f"{'Horizon':<8}{'Return':>10}{'Cat. avg':>10}{'Vol (ann)':>12}{'Rank':>14}")
 
+    fund_last_date = None
+    fund_stale_days = None
+    stale_peer_notes = []
+
     for label, years in HORIZONS.items():
         fund_stats = fund_window(con, fund_id, asof, years)
         peers = category_snapshot(con, category, asof, years)
@@ -197,17 +218,31 @@ def main():
             print(f"{label:<8}{'insufficient history':>46}")
             continue
 
+        if fund_last_date is None:
+            fund_last_date = fund_stats["last_date"]
+            fund_stale_days = fund_stats["stale_days"]
+
         cat_avg = peers["window_return"].mean() if not peers.empty else None
         n_peers = len(peers)
+        n_stale_peers = int((peers["stale_days"] > STALE_TOLERANCE_DAYS).sum()) if n_peers > 0 else 0
+        if n_stale_peers > 0:
+            stale_peer_notes.append(
+                f"{label}: {n_stale_peers}/{n_peers} category peers stale "
+                f"(kept in avg/rank, not dropped)"
+            )
+
         if n_peers > 0:
             better = (peers["window_return"] < fund_stats["window_return"]).sum()
             rank_str = f"{n_peers - better}/{n_peers}"
         else:
             rank_str = "n/a"
 
+        marker = "\u2020" if fund_stats["is_stale"] else ""
+        return_str = format_pct(fund_stats["window_return"]) + marker
+
         print(
             f"{label:<8}"
-            f"{format_pct(fund_stats['window_return']):>10}"
+            f"{return_str:>10}"
             f"{format_pct(cat_avg):>10}"
             f"{fund_stats['ann_vol'] * 100:>11.2f}%"
             f"{rank_str:>14}"
@@ -217,6 +252,13 @@ def main():
     print("Rank = ordinal position in category by trailing return, best=1.")
     print(f"A horizon's anchor must land within {ANCHOR_TOLERANCE_DAYS} days of the exact")
     print("target date (asof - N years) or it's marked insufficient history.")
+
+    if fund_stale_days is not None and fund_stale_days > STALE_TOLERANCE_DAYS:
+        print(f"\u2020 last NAV on file is {fund_last_date} ({fund_stale_days}d before as-of) --")
+        print("  fund may have matured, merged, or stopped filing. Return is vs. its last known NAV.")
+
+    for note in stale_peer_notes:
+        print(f"  ({note})")
 
     con.close()
 
