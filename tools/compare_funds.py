@@ -53,6 +53,11 @@ def main():
     funds = []
     for q in args.queries:
         matches = resolve_query(con, q)
+        if (not matches or len(matches) > 1) and funds:
+            print("Already matched:")
+            for i, (fid, name, cat) in enumerate(funds, 1):
+                print(f"  [{i}] {name}  ({fid})")
+            print()
         if not matches:
             print(f"No fund matched '{q}'.")
             sys.exit(1)
