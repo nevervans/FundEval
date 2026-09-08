@@ -27,6 +27,7 @@ not) numerically match the per-fund vol shown elsewhere.
 """
 
 import datetime as dt
+import re
 
 import numpy as np
 import pandas as pd
@@ -325,6 +326,86 @@ def portfolio_metrics(con, fund_ids, weights, start_date, end_date):
         "start": combined.index[0],
         "end": combined.index[-1],
     }
+
+
+def resolve_fund_query(con, query, by_isin=False):
+    """
+    Match funds by fund_id (exact) or scheme-name search, deduped by
+    fund_id (fund_map can carry more than one row per fund_id -- see
+    category_snapshot's DISTINCT comment for the confirmed case).
+
+    Name search matches every word in `query` as a WHOLE WORD (word-
+    boundary regex), anywhere in scheme_name, in any order. Two
+    escalating fixes were needed here, both confirmed against real data:
+
+    1. Contiguous-phrase matching missed live, renamed funds -- "icici
+       prudential bluechip" is not a substring of "ICICI Prudential
+       Large Cap Fund (erstwhile Bluechip Fund)" even though every word
+       is present, because SEBI's 2018 categorization mandate split the
+       words apart in the rename. Fixed by matching each word
+       independently (AND'd together).
+
+    2. Plain per-word substring matching then broke the OPPOSITE case:
+       "cap" as a bare substring matches inside "SBI LARGE & MIDCAP
+       FUND" -- a different product (large-and-mid-cap blend, not pure
+       large-cap) -- so "sbi large cap" started incorrectly matching it
+       too. Fixed by requiring each word to match as a WHOLE word
+       (regex \\bword\\b), so "cap" no longer matches the "cap" fused
+       inside "midcap".
+
+    Picks the highest scheme_code per fund_id as "most recent name" for
+    each returned row -- a heuristic, since fund_map has no
+    effective-date column.
+    """
+    if by_isin:
+        where, params = "fund_id = ?", [query]
+    else:
+        words = query.lower().split()
+        patterns = [rf"\b{re.escape(w)}\b" for w in words]
+        where = " AND ".join(["regexp_matches(lower(scheme_name), ?)"] * len(patterns))
+        params = patterns
+    sql = f"""
+        WITH matched AS (
+            SELECT fund_id, scheme_name, category,
+                   row_number() OVER (
+                       PARTITION BY fund_id ORDER BY scheme_code DESC
+                   ) AS rn
+            FROM fund_map
+            WHERE {where}
+        )
+        SELECT fund_id, scheme_name, category
+        FROM matched
+        WHERE rn = 1
+        ORDER BY length(scheme_name)
+    """
+    return con.execute(sql, params).fetchall()
+
+
+def rank_among_peers(peers, value_col, fund_id, subject_value):
+    """
+    1-indexed rank of `subject_value` among `peers[value_col]`, best=1.
+    Ties are "competition ranking" -- two funds tied for best both get
+    rank 1, the next distinct value gets rank 3, not 2.
+
+    Deliberately EXCLUDES fund_id's own row from the comparison and uses
+    `subject_value` (the caller's authoritative figure, from fund_window)
+    instead of comparing against a same-fund row inside `peers`. `peers`
+    is produced by category_snapshot, which recomputes CAGR/Sharpe for
+    every peer -- including this fund -- via a vectorized pandas/numpy
+    code path, separate from fund_window's scalar one. The two can differ
+    by ~1e-15 for the SAME fund/dates (numpy's vectorized ** and Python's
+    scalar ** aren't guaranteed bit-identical for fractional exponents).
+    Comparing a fund against a re-derived copy of itself can then
+    register as "self < self" or "self > self", shifting the rank by
+    one. Confirmed on INF879O01019 (Parag Parikh Flexi Cap), 10y Sharpe:
+    a fund genuinely #1 in its category showed rank "0/15" -- impossible,
+    since ranks are 1-indexed. Most other cases wouldn't have looked
+    obviously wrong -- an off-by-one on rank 10 of 22 just reads as 9/22.
+    """
+    n_peers = len(peers)
+    others = peers[peers["fund_id"] != fund_id]
+    better = (others[value_col] > subject_value).sum()
+    return int(better) + 1, n_peers
 
 
 def format_pct(x):

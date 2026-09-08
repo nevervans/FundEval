@@ -23,34 +23,22 @@ from windows import (
     category_snapshot,
     fund_date_range,
     portfolio_metrics,
+    rank_among_peers,
+    resolve_fund_query,
     format_pct,
     format_ratio,
 )
 
 
 def resolve_query(con, query):
-    """Same dedup as fund_lookup.resolve_fund -- see that docstring for
-    why (fund_map multi-row-per-fund_id, confirmed on INF251K01894)."""
-    dedup_sql = """
-        WITH matched AS (
-            SELECT fund_id, scheme_name, category,
-                   row_number() OVER (
-                       PARTITION BY fund_id ORDER BY scheme_code DESC
-                   ) AS rn
-            FROM fund_map
-            WHERE {where}
-        )
-        SELECT fund_id, scheme_name, category
-        FROM matched
-        WHERE rn = 1
-        ORDER BY length(scheme_name)
-    """
-    exact = con.execute(dedup_sql.format(where="fund_id = ?"), [query]).fetchall()
+    """Exact fund_id first; falls back to word-based name search.
+    See windows.resolve_fund_query for the matching logic and why it
+    changed (a contiguous-phrase search missed renamed funds like
+    ICICI Prudential's post-2018 rename)."""
+    exact = resolve_fund_query(con, query, by_isin=True)
     if exact:
         return exact
-    return con.execute(
-        dedup_sql.format(where="lower(scheme_name) LIKE '%' || lower(?) || '%'"), [query]
-    ).fetchall()
+    return resolve_fund_query(con, query, by_isin=False)
 
 
 def main():
@@ -166,11 +154,11 @@ def main():
                 )
 
             if not peers.empty:
-                peer_returns = peers["window_return"] if years <= 1 else peers["cagr"]
                 n_peers = len(peers)
-                worse = (peer_returns < return_val).sum()
-                rank_row[label].append(f"{n_peers - worse}/{n_peers}")
-                catavg_row[label].append(format_pct(peer_returns.mean()))
+                peer_col = "window_return" if years <= 1 else "cagr"
+                rank_num, _ = rank_among_peers(peers, peer_col, fid, return_val)
+                rank_row[label].append(f"{rank_num}/{n_peers}")
+                catavg_row[label].append(format_pct(peers[peer_col].mean()))
             else:
                 catavg_row[label].append("n/a")
                 rank_row[label].append("n/a")

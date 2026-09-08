@@ -26,33 +26,11 @@ from windows import (
     RISK_FREE_RATE,
     fund_window,
     category_snapshot,
+    rank_among_peers,
+    resolve_fund_query,
     format_pct,
     format_ratio,
 )
-
-
-def resolve_fund(con, query, by_isin):
-    """Match by fund_id or scheme-name substring, deduped by fund_id.
-    fund_map can carry more than one row per fund_id -- confirmed on
-    INF251K01894 (pre/post Baroda-BNP-Paribas-merger name rows). Picks
-    the highest scheme_code per fund_id as "most recent name" -- a
-    heuristic, since fund_map has no effective-date column."""
-    where = "fund_id = ?" if by_isin else "lower(scheme_name) LIKE '%' || lower(?) || '%'"
-    sql = f"""
-        WITH matched AS (
-            SELECT fund_id, scheme_name, category,
-                   row_number() OVER (
-                       PARTITION BY fund_id ORDER BY scheme_code DESC
-                   ) AS rn
-            FROM fund_map
-            WHERE {where}
-        )
-        SELECT fund_id, scheme_name, category
-        FROM matched
-        WHERE rn = 1
-        ORDER BY length(scheme_name)
-    """
-    return con.execute(sql, [query]).fetchall()
 
 
 def fund_plan(con, fund_id):
@@ -76,7 +54,7 @@ def main():
         else con.execute("SELECT max(d) FROM nav_fund").fetchone()[0]
     )
 
-    matches = resolve_fund(con, args.query, args.isin)
+    matches = resolve_fund_query(con, args.query, by_isin=args.isin)
     if not matches:
         print(f"No fund matched '{args.query}'.")
         sys.exit(1)
@@ -129,16 +107,16 @@ def main():
             )
 
         if not peers.empty:
-            peer_returns = peers["window_return"] if years <= 1 else peers["cagr"]
             n_peers = len(peers)
-            worse = (peer_returns < return_val).sum()
-            rank_str = f"{n_peers - worse}/{n_peers}"
-            cat_avg = peer_returns.mean()
+            peer_col = "window_return" if years <= 1 else "cagr"
+            rank_num, _ = rank_among_peers(peers, peer_col, fund_id, return_val)
+            rank_str = f"{rank_num}/{n_peers}"
+            cat_avg = peers[peer_col].mean()
             cat_vol = peers["ann_vol"].mean()
             cat_sharpe = peers["sharpe"].mean()
             if stats["sharpe"] is not None:
-                sharpe_worse = (peers["sharpe"] < stats["sharpe"]).sum()
-                sharpe_rank_str = f"{n_peers - sharpe_worse}/{n_peers}"
+                sharpe_rank_num, _ = rank_among_peers(peers, "sharpe", fund_id, stats["sharpe"])
+                sharpe_rank_str = f"{sharpe_rank_num}/{n_peers}"
             else:
                 sharpe_rank_str = "n/a"
         else:

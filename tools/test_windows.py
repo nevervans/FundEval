@@ -33,9 +33,12 @@ from windows import (
     fund_window,
     category_snapshot,
     portfolio_metrics,
+    rank_among_peers,
+    resolve_fund_query,
     STALE_TOLERANCE_DAYS,
     _nearest_anchor,
 )
+import pandas as pd
 
 results = []
 
@@ -218,11 +221,122 @@ def test_portfolio_correlation_and_diversification():
     con.close()
 
 
+def test_rank_among_peers_self_noise():
+    """The exact bug found on INF879O01019 (Parag Parikh Flexi Cap), 10y
+    Sharpe: category_snapshot recomputes this fund's own value via a
+    different (vectorized) code path than fund_window's (scalar) one,
+    and the two can disagree by floating-point noise even for identical
+    inputs. Comparing a fund against that recomputed copy of itself
+    instead of excluding it produced an impossible rank of "0/15" for a
+    fund that was genuinely #1."""
+    peers_noise_low = pd.DataFrame({
+        "fund_id": ["SUBJECT", "B", "C"],
+        "value": [0.10 - 1e-15, 0.05, 0.03],  # SUBJECT's own peers-row sits
+    })                                          # a hair BELOW its true value
+    rank, n_peers = rank_among_peers(peers_noise_low, "value", "SUBJECT", 0.10)
+    check(
+        "self-row noised slightly LOW still gives the best fund rank 1, not 0",
+        rank == 1 and n_peers == 3,
+    )
+
+    peers_noise_high = pd.DataFrame({
+        "fund_id": ["SUBJECT", "B", "C"],
+        "value": [0.10 + 1e-15, 0.05, 0.03],  # self-row noised HIGH instead
+    })
+    rank2, _ = rank_among_peers(peers_noise_high, "value", "SUBJECT", 0.10)
+    check(
+        "self-row noised slightly HIGH still gives the best fund rank 1, not 2",
+        rank2 == 1,
+    )
+
+    peers_tie = pd.DataFrame({
+        "fund_id": ["SUBJECT", "B", "C"],
+        "value": [0.10, 0.10, 0.03],  # B genuinely ties SUBJECT
+    })
+    rank3, _ = rank_among_peers(peers_tie, "value", "SUBJECT", 0.10)
+    check(
+        "a genuine tie with another (non-self) fund still gives rank 1",
+        rank3 == 1,
+    )
+
+
+def test_word_based_name_matching():
+    """The exact real-world case: ICICI Prudential Bluechip Fund's
+    SEBI-2018-mandated rename to "...Large Cap Fund (erstwhile
+    Bluechip Fund)" put a contiguous "prudential bluechip" search out
+    of reach -- the words are both present but not adjacent. Confirmed
+    on the real data: the old contiguous-phrase search silently matched
+    ONLY a dead institutional share class, with no ambiguity warning."""
+    con = make_test_db()
+    con.execute(
+        "INSERT INTO fund_map VALUES (1, "
+        "'ICICI Prudential Large Cap Fund (erstwhile Bluechip Fund) - Growth', "
+        "'Equity Scheme - Large Cap Fund', 'REGULAR', 'GROWTH', 'ICICI_LIVE', False)"
+    )
+    con.execute(
+        "INSERT INTO fund_map VALUES (2, "
+        "'ICICI Prudential Bluechip Fund - Institutional Option - I - Growth', "
+        "'Equity Scheme - Large Cap Fund', 'REGULAR', 'GROWTH', 'ICICI_DEAD', False)"
+    )
+
+    matches = resolve_fund_query(con, "icici prudential bluechip", by_isin=False)
+    fund_ids = {m[0] for m in matches}
+    check(
+        "word-based matching finds the renamed LIVE fund (missed by contiguous phrase)",
+        "ICICI_LIVE" in fund_ids,
+    )
+    check(
+        "word-based matching also surfaces the dead fund -- ambiguity flagged, not silently hidden",
+        "ICICI_DEAD" in fund_ids,
+    )
+
+    narrowed = resolve_fund_query(con, "icici prudential large cap", by_isin=False)
+    narrowed_ids = {m[0] for m in narrowed}
+    check(
+        "adding a distinguishing word narrows the match to just the live fund",
+        narrowed_ids == {"ICICI_LIVE"},
+    )
+    con.close()
+
+
+def test_word_boundary_avoids_compound_false_positive():
+    """Confirmed real near-miss: fixing the ICICI rename case with plain
+    per-word substring matching immediately broke something else --
+    "sbi large cap" started also matching "SBI LARGE & MIDCAP FUND",
+    because "cap" is a bare substring of "midcap" even though it's a
+    different, unrelated product (a large-and-mid-cap blend, not a pure
+    large-cap fund). Word-boundary matching must reject that WITHOUT
+    reintroducing the original ICICI miss."""
+    con = make_test_db()
+    con.execute(
+        "INSERT INTO fund_map VALUES (1, 'SBI Large Cap FUND-REGULAR PLAN GROWTH', "
+        "'Equity Scheme - Large Cap Fund', 'REGULAR', 'GROWTH', 'SBI_LARGECAP', False)"
+    )
+    con.execute(
+        "INSERT INTO fund_map VALUES (2, 'SBI LARGE & MIDCAP FUND- REGULAR PLAN -Growth', "
+        "'Equity Scheme - Large & Mid Cap Fund', 'REGULAR', 'GROWTH', 'SBI_LARGEMID', False)"
+    )
+    matches = resolve_fund_query(con, "sbi large cap", by_isin=False)
+    fund_ids = {m[0] for m in matches}
+    check(
+        "'sbi large cap' matches the pure large-cap fund",
+        "SBI_LARGECAP" in fund_ids,
+    )
+    check(
+        "'sbi large cap' does NOT match via a bare 'cap' substring inside 'midcap'",
+        "SBI_LARGEMID" not in fund_ids,
+    )
+    con.close()
+
+
 if __name__ == "__main__":
     test_anchor_symmetry()
     test_death_boundary()
     test_no_duplicate_peers()
     test_portfolio_correlation_and_diversification()
+    test_rank_among_peers_self_noise()
+    test_word_based_name_matching()
+    test_word_boundary_avoids_compound_false_positive()
 
     failed = [name for name, ok in results if not ok]
     print()
