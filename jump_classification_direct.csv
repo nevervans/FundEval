@@ -1,0 +1,65 @@
+fund_id,date,lr,ratio_immediate,ratio_settled,n_settled_obs,label,scheme_name,rebase_shape
+INF084M01DM9,2014-11-13,-0.5381433568459079,0.5942491250871932,0.6014779617363517,26,REBASE,Aditya Birla Sun Life Multi Asset Omni FoF- Direct Plan - Growth Option,"not round -- check individually, may be a real event"
+INF090I01GK1,2025-04-28,0.9906096533930328,2.6930615051357347,,0,INSUFFICIENT_FORWARD_DATA,Franklin India SHORT TERM INCOME PLAN - Direct - GROWTH,"not round -- check individually, may be a real event"
+INF090I01TH0,2023-09-01,1.2699055397012011,3.563001745200698,,0,INSUFFICIENT_FORWARD_DATA,Franklin India Income Opportunities Fund- Segregated Portfolio 2- 10.90% Vodafone Idea Ltd 02Sep2023-Direct Growth Plan,"not round -- check individually, may be a real event"
+INF090I01TP3,2023-09-01,1.2698875487414092,3.5633710444335134,,0,INSUFFICIENT_FORWARD_DATA,Franklin India Credit Risk Fund- Segregated Portfolio 2- 10.90% Vodafone Idea Ltd 02Sep2023-Direct Growth Plan,"not round -- check individually, may be a real event"
+INF090I01TX7,2023-09-01,1.2695309586920038,3.5619513279253248,,0,INSUFFICIENT_FORWARD_DATA,Franklin India Dynamic Accrual Fund- Segregated Portfolio 2- 10.90% Vodafone Idea Ltd 02Sep2023-Direct-Growth Plan,"not round -- check individually, may be a real event"
+INF090I01UJ4,2023-09-01,1.269110723685656,3.56041986687148,,0,INSUFFICIENT_FORWARD_DATA,Franklin India Low Duration Fund- Segregated Portfolio 2- 10.90% Vodafone Idea Ltd 02Sep2023-Direct- Growth Plan,"not round -- check individually, may be a real event"
+INF090I01UY3,2023-09-01,1.2699015657999073,3.5630884761456625,,0,INSUFFICIENT_FORWARD_DATA,Franklin India Short term Income Plan- Retail Plan- Segregated Portfolio 2- 10.90% Vodafone Idea Ltd 02Sep2023-Direct-Growth Option,"not round -- check individually, may be a real event"
+INF090I01WH4,2020-12-30,0.3751610595265322,1.4552257737189245,,0,INSUFFICIENT_FORWARD_DATA,Franklin India Conservative Hybrid Fund - Segregated Portfolio 1 (10.25% Yes Bank ltd CO 05Mar20) - Direct Growth Plan,"not round -- check individually, may be a real event"
+INF109K01K60,2013-10-22,0.49839670374695344,1.64608,1.65955,26,REBASE,ICICI Prudential Interval Fund Annual Interval Plan II - Direct Plan -  Growth,"not round -- check individually, may be a real event"
+INF109KC11G1,2022-08-17,2.3027232269386047,10.008487813427912,10.054515234933465,26,REBASE,ICICI Prudential Overnight Fund - Direct Plan - Growth,round x10 -- likely face-value change
+INF173K01GU0,2013-03-24,-0.46949404569008957,0.6256323444751974,0.630928996146466,26,REBASE,Principal Cash Management Fund - Direct Plan - Growth Option,"not round -- check individually, may be a real event"
+INF174K01MW2,2013-01-20,4.605631877579014,100.09279447659489,100.84961534185071,26,REBASE,Kotak Money Market Fund - (Growth) - Direct,round x100 -- likely face-value change
+INF174K01NE8,2013-01-20,4.605632255471924,100.09199009718951,100.84243371402427,26,REBASE,Kotak Liquid Fund - Direct Plan - Growth,round x100 -- likely face-value change
+INF179KB1HP9,2015-08-30,4.605593761284932,100.0844183366435,100.79850463950567,26,REBASE,HDFC Liquid Fund - Growth Option - Direct Plan,round x100 -- likely face-value change
+INF179KB1HT1,2015-08-30,4.605544991148916,100.07588625885155,100.71865610729965,26,REBASE,HDFC Overnight Fund - Growth Option - Direct Plan,round x100 -- likely face-value change
+INF179KB1HU9,2015-08-30,4.605593630250298,100.08408006805851,100.800030123174,26,REBASE,HDFC Money Market Fund - Growth Option - Direct Plan,round x100 -- likely face-value change
+INF192K01MB8,2019-12-13,4.605298914206898,100.0378513915806,100.44193922199358,26,REBASE,JM Overnight Fund - (Direct) - Growth,round x100 -- likely face-value change
+INF204KB10H2,2021-03-12,1.295587028874498,3.6531398433937805,,0,INSUFFICIENT_FORWARD_DATA,Nippon India Ultra Short Term Fund - Segregated Portfolio 1 - Direct Plan - Growth Option,"not round -- check individually, may be a real event"
+INF204KB11E7,2025-03-21,0.8154439025276592,2.260178748758689,,0,INSUFFICIENT_FORWARD_DATA,Nippon India Equity Savings Fund - Segregated Portfolio 1 - Direct Plan - Growth Plan - Growth Option,"not round -- check individually, may be a real event"
+INF204KB12K2,2020-07-10,1.2150117494611532,3.372004627334325,,0,INSUFFICIENT_FORWARD_DATA,Nippon India Conservative Hybrid  Fund - Segregated Portfolio 1 - Direct Plan Growth Plan - Growth Option,"not round -- check individually, may be a real event"
+INF204KB12L0,2022-01-27,1.3732757654991181,3.9541080680977054,,0,INSUFFICIENT_FORWARD_DATA,Nippon India Credit Risk Fund - Segregated Portfolio 1 - Direct Plan - Growth Plan,"not round -- check individually, may be a real event"
+INF204KB16F3,2025-03-21,0.8153013735836084,2.2598566308243724,,0,INSUFFICIENT_FORWARD_DATA,Nippon India Aggressive Hybrid Fund - Segregated Portfolio 1 - Direct Plan - Growth Plan,"not round -- check individually, may be a real event"
+INF204KB18M5,2022-01-27,1.3726027307019468,3.9538784067085953,,0,INSUFFICIENT_FORWARD_DATA,Nippon India Medium Term Fund - Segregated Portfolio 1 - Direct Plan - Growth Option,"not round -- check individually, may be a real event"
+INF205K01RF8,2013-04-22,4.607376365984361,100.37975086701111,103.28273055417935,26,REBASE,Invesco India Corporate Bond Fund - Direct Plan - Growth,round x100 -- likely face-value change
+INF205K01RY9,2013-04-22,4.606145552027062,100.14786298514848,101.12194966525972,26,REBASE,Invesco India Money Market Fund - Direct Plan - Growth,round x100 -- likely face-value change
+INF205K01SN0,2013-04-22,4.606896621731717,100.43111682443224,103.62657862958203,26,REBASE,Invesco India Gilt Fund - Direct  Plan - Growth,round x100 -- likely face-value change
+INF205K01TH0,2013-04-22,4.606095002805723,100.1487033032339,101.64829060534528,26,REBASE,Invesco India Ultra Short Term Fund - Direct Plan - Growth,round x100 -- likely face-value change
+INF205K01UH8,2013-04-22,4.606127534253417,100.21877300001248,101.71981150905032,26,REBASE,Invesco India Short Term Fund - Direct Plan - Growth,round x100 -- likely face-value change
+INF209KB1ZH2,2018-11-04,4.605348479155298,100.03482815842614,100.51027650598797,26,REBASE,ADITYA BIRLA SUN LIFE OVERNIGHT FUND-DIRECT PLAN-GROWTH,round x100 -- likely face-value change
+INF223J01OW5,2019-09-27,0.419484237968331,1.5224360960838652,1.543575077694058,26,REBASE,PGIM India Short Duration Fund - Direct Plan - Growth,"not round -- check individually, may be a real event"
+INF223J01QO7,2019-09-13,-0.36085607587686996,0.6991041889753712,1.0170831402132046,26,REVERT,PGIM India Ultra Short Term Fund - Direct Plan - Growth,"not round -- check individually, may be a real event"
+INF223J01QO7,2019-09-27,0.36601277516285885,1.4425238914264238,1.4541421297825567,26,REBASE,PGIM India Ultra Short Term Fund - Direct Plan - Growth,"not round -- check individually, may be a real event"
+INF277K01YE6,2014-02-02,4.605653446968436,100.09155845786763,100.85382644731885,26,REBASE,Tata Liquid Fund- Direct Plan-Growth Option,round x100 -- likely face-value change
+INF613Q01140,2021-09-30,-0.37766301857354534,0.682531447641225,,5,INSUFFICIENT_FORWARD_DATA,IL&FS Infrastructure Debt Fund Series 2A - Growth - Direct,"not round -- check individually, may be a real event"
+INF613Q01140,2024-06-30,0.3722633878541258,1.4965340327349126,,0,INSUFFICIENT_FORWARD_DATA,IL&FS Infrastructure Debt Fund Series 2A - Growth - Direct,"not round -- check individually, may be a real event"
+INF613Q01157,2024-06-30,0.3782526138417132,1.523927466393446,,0,INSUFFICIENT_FORWARD_DATA,IL&FS Infrastructure Debt Fund Series 2B - Growth - Direct,"not round -- check individually, may be a real event"
+INF613Q01165,2024-06-30,0.37862598745783316,1.5255618834267957,,0,INSUFFICIENT_FORWARD_DATA,IL&FS Infrastructure Debt Fund Series 2C - Growth - Direct,"not round -- check individually, may be a real event"
+INF663L01T01,2019-09-07,4.605314644403312,100.04341312880128,100.43815102216097,26,REBASE,PGIM India Overnight Fund - Direct Plan - Growth Option,round x100 -- likely face-value change
+INF754K01GM4,2017-07-02,4.605528651645969,100.07118503588448,100.65199813513667,26,REBASE,Edelweiss Liquid Fund - Direct Plan - Growth Option,round x100 -- likely face-value change
+INF761K01DG8,2019-06-26,-0.35111997632010383,0.7044175491679274,0.7205849722642462,26,REBASE,BANK OF INDIA Credit Risk  Fund - Direct Plan,"not round -- check individually, may be a real event"
+INF761K01DG8,2020-04-24,-0.6975457070421723,0.49822270878103503,0.5040073524442822,26,REBASE,BANK OF INDIA Credit Risk  Fund - Direct Plan,"not round -- check individually, may be a real event"
+INF761K01DG8,2022-03-31,0.7967724751169534,2.2215850954979537,2.217588250341064,26,REBASE,BANK OF INDIA Credit Risk  Fund - Direct Plan,"not round -- check individually, may be a real event"
+INF767K01DN1,2013-01-21,4.605397486054112,100.06764561170532,100.68138826125795,26,REBASE,LIC MF Liquid Fund-Direct Plan-Growth,round x100 -- likely face-value change
+INF789F1AD46,2026-06-20,-2.3024128091686666,0.10005362450421856,0.10055270296929343,26,REBASE,UTI Liquid Fund - Direct Plan - Growth Option,round x0.1 -- likely face-value change
+INF789F1AMK1,2021-03-12,1.2924986589152014,3.6418749999999998,,0,INSUFFICIENT_FORWARD_DATA,UTI - Credit Risk Fund (Segregated - 13092019) - Direct Plan - Growth Option,"not round -- check individually, may be a real event"
+INF789F1ANG7,2020-07-10,-0.5949360387968029,0.5518752694352638,0.5574795229199598,26,REBASE,UTI - Credit Risk Fund (Segregated - 17022020) - Direct Plan - Growth Option,"not round -- check individually, may be a real event"
+INF789F1ANG7,2022-01-27,0.9522870043890075,2.5942966338380122,,0,INSUFFICIENT_FORWARD_DATA,UTI - Credit Risk Fund (Segregated - 17022020) - Direct Plan - Growth Option,"not round -- check individually, may be a real event"
+INF789F1ANG7,2022-01-31,0.42031018504591705,3.946255506607929,,0,INSUFFICIENT_FORWARD_DATA,UTI - Credit Risk Fund (Segregated - 17022020) - Direct Plan - Growth Option,"not round -- check individually, may be a real event"
+INF789F1AOC4,2022-01-27,1.3708531766315128,3.9429494079655547,,0,INSUFFICIENT_FORWARD_DATA,UTI - Medium Term Fund (Segregated - 17022020) - Direct Plan - Growth Option,"not round -- check individually, may be a real event"
+INF789F1APF4,2022-01-27,1.3701497378930594,3.940372137916242,,0,INSUFFICIENT_FORWARD_DATA,UTI - Bond Fund (Segregated - 17022020) - Direct Plan - Growth Option,"not round -- check individually, may be a real event"
+INF789F1APX7,2022-01-27,1.3710471316991968,3.9440866510538637,,0,INSUFFICIENT_FORWARD_DATA,UTI - Dynamic Bond Fund (Segregated - 17022020) - Direct Plan - Growth Option,"not round -- check individually, may be a real event"
+INF789F1AQP1,2022-01-27,1.3712125865625684,3.9443155452436196,,0,INSUFFICIENT_FORWARD_DATA,UTI - Regular Saving Fund (Segregated - 17022020) - Direct Plan - Growth Option,"not round -- check individually, may be a real event"
+INF789F1AUU3,2021-02-22,-2.317880786976625,0.09735746271990457,0.09708303099158837,26,REBASE,UTI - BSE Sensex Next 50 Exchange Traded Fund,round x0.1 -- likely face-value change
+INF789F1AUV1,2021-02-22,-2.3190185521942914,0.09552048321648428,0.08908043406424652,26,REBASE,UTI Nifty Bank ETF,round x0.1 -- likely face-value change
+INF789F1AUW9,2021-03-30,-2.2988435590679033,0.09936063799621796,0.10559533789288475,26,REBASE,UTI Nifty Next 50 Exchange Traded Fund,round x0.1 -- likely face-value change
+INF789F1AUX7,2021-03-30,-4.613804383434543,0.009881435676838286,0.010701540785691882,26,REBASE,UTI GOLD Exchange Traded Fund,round x0.01 -- likely face-value change
+INF789FB1S71,2018-05-03,4.605326641432285,100.07720589733869,100.52084938307836,26,REBASE,UTI - Overnight Fund - Direct Plan - Growth Option,round x100 -- likely face-value change
+INF917K01FE6,2013-08-05,-0.4046781545119648,0.667456130907525,0.6749834269169532,26,REBASE,L&T Money Market Fund -Direct Plan- Growth,"not round -- check individually, may be a real event"
+INF959L01GF1,2014-09-21,4.605651271002694,100.09583637094522,101.00040539343604,26,REBASE,Navi Liquid Fund-Direct Plan-Growth Option,round x100 -- likely face-value change
+INF959L01GF1,2022-11-27,-4.604821388212284,0.010006944738843887,0.010063068449605927,26,REBASE,Navi Liquid Fund-Direct Plan-Growth Option,round x0.01 -- likely face-value change
+INF966L01580,2014-09-23,0.594623920510109,1.813739275892169,1.010242915423358,26,REVERT,quant Multi Asset Allocation Fund-GROWTH OPTION-Direct Plan,"not round -- check individually, may be a real event"
+INF966L01580,2014-09-24,-0.5942371467095768,1.0009640278837761,1.0102446220755081,26,REBASE,quant Multi Asset Allocation Fund-GROWTH OPTION-Direct Plan,round x1 -- likely face-value change
+INF966L01648,2015-05-27,0.5294609969841825,1.6975099308225667,1.0107766341078976,26,REVERT,quant Large & Mid Cap Fund - Growth Option-Direct Plan,"not round -- check individually, may be a real event"
+INF966L01648,2015-05-28,-0.5323038279322913,0.9956548184604621,1.0110001073375128,26,REBASE,quant Large & Mid Cap Fund - Growth Option-Direct Plan,round x1 -- likely face-value change

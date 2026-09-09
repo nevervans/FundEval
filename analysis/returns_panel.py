@@ -57,8 +57,17 @@ def q(col):
     return f'"{col}"' if col else "NULL"
 
 
-def build_fund_map(con, cfg, plan):
-    """Collapse scheme codes to fund_id (ISIN), restricted to one plan+option."""
+def build_fund_map(con, cfg, plan, categories=None):
+    """Collapse scheme codes to fund_id (ISIN), restricted to one plan+option.
+    Always excludes rows with a NULL category -- AMFI leaves matured/closed-
+    ended legacy products (Fixed Term Plans, Capital Protection, Interval
+    Income Funds) uncategorized, so this filter is what makes a categories=None
+    run "comprehensive" rather than "everything AMFI ever listed, including
+    dead products with no active NAV."
+    categories, if given, further restricts to category names containing any
+    of the given substrings (case-insensitive) -- for a small, fast,
+    single-plan universe scoped to just what you need, instead of the full
+    universe."""
     name = q(cfg["NAME_COL"])
 
     if cfg["PLAN_COL"]:
@@ -80,6 +89,18 @@ def build_fund_map(con, cfg, plan):
     idv = f"nullif(nullif(trim(cast({q(cfg['ISIN_D_COL'])} AS VARCHAR)), '-'), '')" \
         if cfg["ISIN_D_COL"] else "NULL"
 
+    # Substring OR-match on category, case-insensitive -- deliberately not an
+    # exact match, since AMFI category strings aren't consistent even for the
+    # same fund type (e.g. "Equity Scheme - Large Cap Fund" vs "Equity
+    # Schemes - Large Cap Fund"). An exact match would silently drop some.
+    cat_filter = ""
+    if categories:
+        conds = " OR ".join(
+            "lower(category) LIKE '%" + c.strip().lower().replace("'", "''") + "%'"
+            for c in categories
+        )
+        cat_filter = f" AND ({conds})"
+
     con.execute(f"""
         CREATE OR REPLACE TABLE fund_map AS
         WITH tagged AS (
@@ -98,7 +119,7 @@ def build_fund_map(con, cfg, plan):
             coalesce(isin_g, isin_d, 'CODE:' || scheme_code) AS fund_id,
             (isin_g IS NULL AND isin_d IS NULL)              AS no_isin
         FROM tagged
-        WHERE plan = '{plan}' AND option_type = 'GROWTH'
+        WHERE plan = '{plan}' AND option_type = 'GROWTH' AND category IS NOT NULL{cat_filter}
     """)
     return con.execute("""
         SELECT count(*) codes, count(DISTINCT fund_id) funds, sum(no_isin::INT) no_isin
@@ -238,6 +259,9 @@ def build_panel(con, wins):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--plan", default="REGULAR", choices=["REGULAR", "DIRECT"])
+    ap.add_argument("--categories", default=None,
+                     help="Comma-separated category substrings (case-insensitive), "
+                          "e.g. 'large cap'. Default: all categories.")
     ap.add_argument("--src", default=None, help="override CONFIG['SRC_DB']")
     ap.add_argument("--out", default="fundeval_analysis.duckdb")
     ap.add_argument("--start-fy", type=int, default=2006)
@@ -271,7 +295,11 @@ def main():
               + ("   (both inferred from scheme_name)"
                  if not cfg["PLAN_COL"] and not cfg["OPT_COL"] else ""))
 
-        codes, funds, no_isin = build_fund_map(con, cfg, args.plan)
+        categories = [c for c in args.categories.split(",")] if args.categories else None
+        if categories:
+            print(f"categories: restricted to substrings {categories}")
+
+        codes, funds, no_isin = build_fund_map(con, cfg, args.plan, categories)
         print(f"\nfund_map: {codes:,} codes -> {funds:,} funds  ({no_isin:,} lacking ISIN)")
 
         rows, nfunds, jumps = build_nav_fund(con, cfg)
