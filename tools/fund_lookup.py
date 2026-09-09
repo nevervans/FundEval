@@ -3,14 +3,15 @@ fund_lookup.py — one-pager fund query tool for FundEval
 
 Given a scheme name (substring match) or an ISIN/fund_id, prints trailing
 1y/3y/5y/10y returns (CAGR for >1y), category average, annualized
-volatility, Sharpe ratio, max drawdown, and category rank — computed
-LIVE from nav_fund via a rolling anchor date. See windows.py for the
-anchor-matching, dead-fund, and risk-metric logic this depends on.
+volatility, Sharpe ratio, max drawdown, category rank, and percentile —
+computed LIVE from nav_fund via a rolling anchor date. See windows.py for
+the anchor-matching, dead-fund, and risk-metric logic this depends on.
 
 Usage:
     python3 fund_lookup.py "quant small cap"
     python3 fund_lookup.py --isin INF090I01817
     python3 fund_lookup.py "hdfc flexi cap" --asof 2025-03-31
+    python3 fund_lookup.py "parag parikh flexi cap" --rolling
 """
 
 import argparse
@@ -27,6 +28,9 @@ from windows import (
     fund_window,
     category_snapshot,
     rank_among_peers,
+    percentile_from_rank,
+    rolling_returns,
+    rolling_summary,
     resolve_fund_query,
     format_pct,
     format_ratio,
@@ -46,6 +50,7 @@ def main():
     ap.add_argument("--isin", action="store_true")
     ap.add_argument("--db", default="fundeval_analysis.duckdb")
     ap.add_argument("--asof", default=None, help="YYYY-MM-DD; defaults to latest NAV date in the DB")
+    ap.add_argument("--rolling", action="store_true", help="also show rolling-window return distributions")
     args = ap.parse_args()
 
     con = duckdb.connect(args.db, read_only=True)
@@ -69,17 +74,17 @@ def main():
     fund_id, scheme_name, category = matches[0]
     plan_label = fund_plan(con, fund_id)
 
-    print("=" * 90)
+    print("=" * 96)
     print(f"{scheme_name}")
     print(f"fund_id: {fund_id}   category: {category}   plan: {plan_label}")
     print(f"as of: {asof}")
-    print("=" * 90)
-    print(f"{'Horizon':<8}{'Return':>10}{'Cat. avg':>10}{'Vol (ann)':>11}{'Rank':>12}")
+    print("=" * 96)
+    print(f"{'Horizon':<8}{'Return':>10}{'Cat. avg':>10}{'Vol (ann)':>11}{'Rank':>10}{'Pctile':>9}")
 
     death_year = None
     stale_peer_notes = []
     low_obs_notes = []
-    risk_rows = []  # (label, sharpe, max_dd, cat_vol, cat_sharpe, sharpe_rank_str)
+    risk_rows = []  # (label, sharpe, max_dd, cat_vol, cat_sharpe, sharpe_rank_str, sharpe_pctile)
 
     for label, years in HORIZONS.items():
         stats = fund_window(con, fund_id, asof, years)
@@ -107,54 +112,58 @@ def main():
             )
 
         if not peers.empty:
-            n_peers = len(peers)
             peer_col = "window_return" if years <= 1 else "cagr"
-            rank_num, _ = rank_among_peers(peers, peer_col, fund_id, return_val)
+            rank_num, n_peers = rank_among_peers(peers, peer_col, fund_id, return_val)
+            pctile = percentile_from_rank(rank_num, n_peers)
             rank_str = f"{rank_num}/{n_peers}"
             cat_avg = peers[peer_col].mean()
             cat_vol = peers["ann_vol"].mean()
             cat_sharpe = peers["sharpe"].mean()
             if stats["sharpe"] is not None:
-                sharpe_rank_num, _ = rank_among_peers(peers, "sharpe", fund_id, stats["sharpe"])
-                sharpe_rank_str = f"{sharpe_rank_num}/{n_peers}"
+                sharpe_rank, _ = rank_among_peers(peers, "sharpe", fund_id, stats["sharpe"])
+                sharpe_pctile = percentile_from_rank(sharpe_rank, n_peers)
+                sharpe_rank_str = f"{sharpe_rank}/{n_peers}"
             else:
-                sharpe_rank_str = "n/a"
+                sharpe_rank_str, sharpe_pctile = "n/a", None
         else:
-            rank_str = "n/a"
-            cat_avg = None
-            cat_vol = None
-            cat_sharpe = None
-            sharpe_rank_str = "n/a"
+            rank_str, pctile = "n/a", None
+            cat_avg = cat_vol = cat_sharpe = None
+            sharpe_rank_str, sharpe_pctile = "n/a", None
 
         vol_str = f"{stats['ann_vol'] * 100:.2f}%" if stats["ann_vol"] is not None else "n/a"
+        pctile_str = f"{pctile:.0f}" if pctile is not None else "n/a"
 
         print(
             f"{label:<8}"
             f"{format_pct(return_val):>10}"
             f"{format_pct(cat_avg):>10}"
             f"{vol_str:>11}"
-            f"{rank_str:>12}"
+            f"{rank_str:>10}"
+            f"{pctile_str:>9}"
         )
 
-        risk_rows.append((label, stats["sharpe"], stats["max_dd"], cat_vol, cat_sharpe, sharpe_rank_str))
+        risk_rows.append((label, stats["sharpe"], stats["max_dd"], cat_vol, cat_sharpe, sharpe_rank_str, sharpe_pctile))
 
     if risk_rows:
         print()
-        print(f"{'Horizon':<8}{'Sharpe':>9}{'Cat.Sharpe':>12}{'Max DD':>10}{'Cat.Vol':>10}{'SharpeRk':>12}")
-        for label, sharpe, max_dd, cat_vol, cat_sharpe, sharpe_rank_str in risk_rows:
+        print(f"{'Horizon':<8}{'Sharpe':>9}{'Cat.Sharpe':>12}{'Max DD':>10}{'Cat.Vol':>10}{'SharpeRk':>10}{'Pctile':>9}")
+        for label, sharpe, max_dd, cat_vol, cat_sharpe, sharpe_rank_str, sharpe_pctile in risk_rows:
             max_dd_str = format_pct(max_dd) if max_dd is not None else "n/a"
             cat_vol_str = f"{cat_vol * 100:.2f}%" if cat_vol is not None else "n/a"
+            sharpe_pctile_str = f"{sharpe_pctile:.0f}" if sharpe_pctile is not None else "n/a"
             print(
                 f"{label:<8}"
                 f"{format_ratio(sharpe):>9}"
                 f"{format_ratio(cat_sharpe):>12}"
                 f"{max_dd_str:>10}"
                 f"{cat_vol_str:>10}"
-                f"{sharpe_rank_str:>12}"
+                f"{sharpe_rank_str:>10}"
+                f"{sharpe_pctile_str:>9}"
             )
 
-    print("=" * 90)
+    print("=" * 96)
     print("Rank = ordinal position in category by trailing return (CAGR for >1y), best=1.")
+    print("Pctile = beat X% of category peers on that metric, HIGHER = BETTER.")
     print(f"Sharpe = (CAGR - {RISK_FREE_RATE * 100:.1f}%) / annualized vol -- {RISK_FREE_RATE * 100:.1f}% is a")
     print("static placeholder risk-free rate, not a real historical bond series.")
     print("Max DD = worst peak-to-trough NAV decline within this window.")
@@ -171,6 +180,35 @@ def main():
         print(f"  ({note})")
     for note in low_obs_notes:
         print(f"  ({note})")
+
+    if args.rolling:
+        print()
+        print("=" * 96)
+        print("Rolling returns (all available N-year windows in the fund's full history,")
+        print("sampled every 5 observations)")
+        print("=" * 96)
+        print(f"{'Horizon':<8}{'N':>5}{'Median':>10}{'P10':>10}{'P90':>10}{'Worst':>10}{'Best':>10}{'%Neg':>8}")
+        for label, years in HORIZONS.items():
+            if years >= 10:
+                continue  # 10y windows are rarely plentiful enough to summarize meaningfully
+            rdf = rolling_returns(con, fund_id, years)
+            summary = rolling_summary(rdf)
+            if summary is None:
+                print(f"{label:<8}{'no windows available':>53}")
+                continue
+            print(
+                f"{label:<8}"
+                f"{summary['n_windows']:>5}"
+                f"{format_pct(summary['median_cagr']):>10}"
+                f"{format_pct(summary['p10_cagr']):>10}"
+                f"{format_pct(summary['p90_cagr']):>10}"
+                f"{format_pct(summary['worst_cagr']):>10}"
+                f"{format_pct(summary['best_cagr']):>10}"
+                f"{summary['pct_negative']:>7.1f}%"
+            )
+        print("(CAGR annualized on each window's actual elapsed time. This is the fund's own")
+        print("historical path, not compared to any peer -- use it to see how much a single")
+        print("point-in-time snapshot, like the table above, could have differed on another day.)")
 
     con.close()
 

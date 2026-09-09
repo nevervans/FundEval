@@ -24,6 +24,7 @@ from windows import (
     fund_date_range,
     portfolio_metrics,
     rank_among_peers,
+    percentile_from_rank,
     resolve_fund_query,
     format_pct,
     format_ratio,
@@ -32,9 +33,7 @@ from windows import (
 
 def resolve_query(con, query):
     """Exact fund_id first; falls back to word-based name search.
-    See windows.resolve_fund_query for the matching logic and why it
-    changed (a contiguous-phrase search missed renamed funds like
-    ICICI Prudential's post-2018 rename)."""
+    See windows.resolve_fund_query for the matching logic."""
     exact = resolve_fund_query(con, query, by_isin=True)
     if exact:
         return exact
@@ -107,6 +106,7 @@ def main():
     catavg_row = {h: [] for h in HORIZONS}
     vol_row = {h: [] for h in HORIZONS}
     rank_row = {h: [] for h in HORIZONS}
+    pctile_row = {h: [] for h in HORIZONS}
     sharpe_row = {h: [] for h in HORIZONS}
     maxdd_row = {h: [] for h in HORIZONS}
     death_notes = []
@@ -121,6 +121,7 @@ def main():
                 catavg_row[label].append("n/a")
                 vol_row[label].append("n/a")
                 rank_row[label].append("n/a")
+                pctile_row[label].append("n/a")
                 sharpe_row[label].append("n/a")
                 maxdd_row[label].append("n/a")
                 continue
@@ -130,6 +131,7 @@ def main():
                 catavg_row[label].append("n/a")
                 vol_row[label].append("n/a")
                 rank_row[label].append("n/a")
+                pctile_row[label].append("n/a")
                 sharpe_row[label].append("n/a")
                 maxdd_row[label].append("n/a")
                 death_notes.append(f"[{idx}] {name}: died {stats['death_year']}")
@@ -141,7 +143,7 @@ def main():
                 f"{stats['ann_vol'] * 100:.2f}%" if stats["ann_vol"] is not None else "n/a"
             )
             sharpe_row[label].append(format_ratio(stats["sharpe"]))
-            maxdd_row[label].append(format_pct(stats["max_dd"]) if stats["max_dd"] is not None else "n/a")
+            maxdd_row[label].append(format_pct(stats["max_dd"]))
 
             if cat:
                 peers, meta = category_snapshot(con, cat, asof, years)
@@ -154,14 +156,15 @@ def main():
                 )
 
             if not peers.empty:
-                n_peers = len(peers)
                 peer_col = "window_return" if years <= 1 else "cagr"
-                rank_num, _ = rank_among_peers(peers, peer_col, fid, return_val)
+                rank_num, n_peers = rank_among_peers(peers, peer_col, fid, return_val)
                 rank_row[label].append(f"{rank_num}/{n_peers}")
+                pctile_row[label].append(f"{percentile_from_rank(rank_num, n_peers):.0f}")
                 catavg_row[label].append(format_pct(peers[peer_col].mean()))
             else:
                 catavg_row[label].append("n/a")
                 rank_row[label].append("n/a")
+                pctile_row[label].append("n/a")
 
     def print_table(title, data):
         print(f"\n{title}")
@@ -172,6 +175,7 @@ def main():
     print_table("Category Avg Return (CAGR for >1y)", catavg_row)
     print_table("Annualized Volatility", vol_row)
     print_table("Rank in Category", rank_row)
+    print_table("Percentile in Category (higher = better)", pctile_row)
     print_table("Sharpe Ratio (vs static risk-free placeholder)", sharpe_row)
     print_table("Max Drawdown (within window)", maxdd_row)
 
@@ -237,6 +241,15 @@ def main():
                 print(f"\nPortfolio CAGR:   {format_pct(result['portfolio_cagr'])}")
                 print(f"Portfolio Sharpe: {format_ratio(result['portfolio_sharpe'])}")
                 print(f"Portfolio Max DD: {format_pct(result['portfolio_max_dd'])}")
+
+                pct_contrib = result["pct_contribution_to_risk"]
+                if all(v is not None for v in pct_contrib.values()):
+                    print("\nContribution to portfolio risk (normalized to 100% -- NOT the same as weight):")
+                    contrib_str = "  ".join(
+                        f"{labels[i]} {pct_contrib[fund_ids[i]] * 100:.1f}%" for i in range(len(fund_ids))
+                    )
+                    print("  " + contrib_str)
+
                 print(
                     "\n(Assumes daily rebalancing to these fixed weights -- a real "
                     "buy-and-hold allocation's weights drift over time and will show "

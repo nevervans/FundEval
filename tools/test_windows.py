@@ -35,6 +35,10 @@ from windows import (
     portfolio_metrics,
     rank_among_peers,
     resolve_fund_query,
+    percentile_from_rank,
+    rolling_returns,
+    survivorship_counts,
+    _closed_end_fund_ids,
     STALE_TOLERANCE_DAYS,
     _nearest_anchor,
 )
@@ -329,6 +333,152 @@ def test_word_boundary_avoids_compound_false_positive():
     con.close()
 
 
+def test_percentile_from_rank():
+    check("rank 1 of 20 is the 100th percentile (best)", percentile_from_rank(1, 20) == 100.0)
+    check("rank 20 of 20 is the 0th percentile (worst)", percentile_from_rank(20, 20) == 0.0)
+    check(
+        "rank 10 of 20 is roughly the 53rd percentile",
+        abs(percentile_from_rank(10, 20) - 52.6) < 0.1,
+    )
+    check("a single-fund 'category' is always the 100th percentile", percentile_from_rank(1, 1) == 100.0)
+
+
+def test_marginal_contribution_to_risk_symmetric():
+    """Two IDENTICAL funds at equal weight should each contribute
+    exactly 50% of portfolio risk, by symmetry -- the simplest possible
+    correctness check for the covariance-based decomposition."""
+    con = make_test_db()
+    start, end = dt.date(2020, 1, 1), dt.date(2022, 12, 31)
+    seed_alternating_navs(con, "TWIN_A", start, end)
+    seed_alternating_navs(con, "TWIN_B", start, end)
+    result = portfolio_metrics(con, ["TWIN_A", "TWIN_B"], {"TWIN_A": 0.5, "TWIN_B": 0.5}, start, end)
+    pct = result["pct_contribution_to_risk"] if result else {}
+    check(
+        "two identical funds at equal weight each contribute ~50% of portfolio risk",
+        result is not None
+        and abs(pct["TWIN_A"] - 0.5) < 1e-6
+        and abs(pct["TWIN_B"] - 0.5) < 1e-6,
+    )
+
+
+def test_rolling_returns_constant_growth():
+    """A fund compounding at a fixed daily rate should show the SAME
+    CAGR for every rolling window of a given length, regardless of
+    which exact dates the anchor-matching lands on -- annualizing on
+    each window's actual elapsed time makes the elapsed-days term
+    cancel out algebraically. If this doesn't hold exactly, something
+    is inconsistent between the annualization here and in fund_window."""
+    con = make_test_db()
+    start, end = dt.date(2010, 1, 1), dt.date(2023, 1, 1)
+    daily_rate = 0.0003
+    seed_daily_navs(con, "STEADY", start, end, start_nav=10.0, daily_growth=daily_rate)
+    implied_annual = (1 + daily_rate) ** 365.25 - 1
+
+    rdf = rolling_returns(con, "STEADY", years=3)
+    check("rolling_returns finds many 3y windows across a 13y history", len(rdf) > 50)
+    check(
+        "every rolling 3y CAGR matches the fund's constant compounding rate",
+        not rdf.empty and rdf["cagr"].sub(implied_annual).abs().max() < 1e-6,
+    )
+    con.close()
+
+
+def test_survivorship_counts():
+    con = make_test_db()
+    asof = dt.date(2026, 1, 1)
+    con.execute(
+        "INSERT INTO fund_map VALUES (1, 'Alive Fund', 'Test Category 2', 'REGULAR', 'GROWTH', 'SURV_ALIVE', False)"
+    )
+    con.execute(
+        "INSERT INTO fund_map VALUES (2, 'Dead Fund', 'Test Category 2', 'REGULAR', 'GROWTH', 'SURV_DEAD', False)"
+    )
+    seed_daily_navs(con, "SURV_ALIVE", dt.date(2010, 1, 1), asof)
+    dead_last = asof - dt.timedelta(days=STALE_TOLERANCE_DAYS + 5)
+    seed_daily_navs(con, "SURV_DEAD", dt.date(2010, 1, 1), dead_last)
+
+    n_considered, n_dead = survivorship_counts(con, "Test Category 2", asof, years=10)
+    check(
+        "survivorship_counts correctly counts 1 dead of 2 considered",
+        n_considered == 2 and n_dead == 1,
+    )
+    con.close()
+
+
+def test_closed_end_exclusion_in_survivorship():
+    """Confirmed real issue: closed-end/fixed-maturity products (FMPs,
+    Fixed Horizon Funds, etc) mature on a SCHEDULED date by design --
+    their NAV series stopping isn't the same phenomenon as an
+    open-ended fund closing. Conflating the two inflated several legacy
+    category buckets to a misleading ~100% "death rate" in real data
+    (confirmed: "IDF" category, 597 funds, almost entirely Kotak/Reliance
+    FMPs and Fixed Horizon Funds)."""
+    con = make_test_db()
+    asof = dt.date(2026, 1, 1)
+    con.execute(
+        "INSERT INTO fund_map VALUES (1, 'Some Open Ended Debt Fund - Growth', "
+        "'Test Legacy Category', 'REGULAR', 'GROWTH', 'OPEN_DEAD', False)"
+    )
+    con.execute(
+        "INSERT INTO fund_map VALUES (2, 'XYZ Fixed Maturity Plan Series 5 - Growth', "
+        "'Test Legacy Category', 'REGULAR', 'GROWTH', 'FMP_DEAD', False)"
+    )
+    dead_last = asof - dt.timedelta(days=STALE_TOLERANCE_DAYS + 5)
+    seed_daily_navs(con, "OPEN_DEAD", dt.date(2010, 1, 1), dead_last)
+    seed_daily_navs(con, "FMP_DEAD", dt.date(2010, 1, 1), dead_last)
+
+    exclude_ids = _closed_end_fund_ids(con)
+    check("the FMP-named fund is flagged as likely closed-end", "FMP_DEAD" in exclude_ids)
+    check("the genuinely open-ended fund is NOT flagged", "OPEN_DEAD" not in exclude_ids)
+
+    n_considered, n_dead = survivorship_counts(con, "Test Legacy Category", asof, 10, exclude_ids)
+    check(
+        "excluding the closed-end fund leaves only the genuine open-ended death counted",
+        n_considered == 1 and n_dead == 1,
+    )
+    con.close()
+
+
+def test_closed_end_pattern_covers_confirmed_real_cases():
+    """Real fund names, confirmed by hand against actual FundEval data,
+    that are closed-end/fixed-tenure products the FIRST version of this
+    pattern missed -- each one left "IDF"/"Income"/"Growth" showing a
+    misleadingly high death rate even after the initial FMP/FTP-only
+    filter."""
+    con = make_test_db()
+    real_closed_end_names = [
+        ("IDF_1", "IL&FS Infrastructure Debt Fund Series 1A - Growth"),
+        ("IDF_2", "UTI F I I F Series II -Quarterly Interval Plan - VII - Regular Plan - Growth Option"),
+        ("IDF_3", "UTI FTIF Series XXIV-XIV (1831 Days)- Regular Plan - Growth Option"),
+        ("INC_1", "HSBC Fixed Term Series 125 - Growth Option"),
+        ("GRW_1", "Reliance Capital Builder Fund- Series B- Growth Option"),
+        ("GRW_2", "Reliance Close Ended Equity Fund - Series A - Growth Option"),
+        ("GRW_3", "UTI Focussed Equity Fund Series - 1 (2195 Days) - Regular Plan - Growth Option"),
+    ]
+    for i, (fid, name) in enumerate(real_closed_end_names):
+        con.execute(
+            "INSERT INTO fund_map VALUES (?, ?, 'Test Category 3', 'REGULAR', 'GROWTH', ?, False)",
+            [1000 + i, name, fid],
+        )
+    exclude_ids = _closed_end_fund_ids(con)
+    for fid, name in real_closed_end_names:
+        check(f"real closed-end name is flagged: '{name[:45]}...'", fid in exclude_ids)
+
+    # A genuinely open-ended fund that stopped reporting for unrelated
+    # reasons (confirmed: ICICI Prudential Dynamic Bond Fund, last NAV
+    # 2018 -- likely a SEBI-2018-mandate scheme merger, not a scheduled
+    # maturity) must NOT get swept up by the broadened patterns.
+    con.execute(
+        "INSERT INTO fund_map VALUES (2000, 'ICICI Prudential Dynamic Bond Fund - Growth', "
+        "'Test Category 3', 'REGULAR', 'GROWTH', 'OPEN_BOND', False)"
+    )
+    exclude_ids2 = _closed_end_fund_ids(con)
+    check(
+        "a genuinely open-ended fund ('Dynamic Bond Fund') is NOT swept up by the broadened patterns",
+        "OPEN_BOND" not in exclude_ids2,
+    )
+    con.close()
+
+
 if __name__ == "__main__":
     test_anchor_symmetry()
     test_death_boundary()
@@ -337,6 +487,12 @@ if __name__ == "__main__":
     test_rank_among_peers_self_noise()
     test_word_based_name_matching()
     test_word_boundary_avoids_compound_false_positive()
+    test_percentile_from_rank()
+    test_marginal_contribution_to_risk_symmetric()
+    test_rolling_returns_constant_growth()
+    test_survivorship_counts()
+    test_closed_end_exclusion_in_survivorship()
+    test_closed_end_pattern_covers_confirmed_real_cases()
 
     failed = [name for name, ok in results if not ok]
     print()
