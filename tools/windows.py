@@ -197,7 +197,21 @@ def _category_raw_snapshot(con, category, asof, years):
             -- DISTINCT: fund_map can carry more than one row per fund_id
             -- (a name-history row from a renamed fund). Confirmed
             -- instance: INF251K01894 (Baroda-BNP-Paribas merger).
-            SELECT DISTINCT fund_id FROM fund_map WHERE category = ?
+            -- Joined through category_map (not a raw category match) so
+            -- categories differing only by spelling -- e.g. "Equity
+            -- Scheme - Large Cap Fund" vs "Equity Schemes - Large Cap
+            -- Fund" -- are one peer group, not two. Confirmed instance:
+            -- Axis (9 peers) vs Bajaj Finserv (24 peers) Large Cap were
+            -- being scored against different-sized peer sets despite
+            -- being the same category. Requires category_map to exist
+            -- (analysis/build_category_map.py) -- rebuild it after any
+            -- fund_map rebuild.
+            SELECT DISTINCT fm.fund_id
+            FROM fund_map fm
+            JOIN category_map cm ON fm.category = cm.raw_category
+            WHERE cm.canonical_category = (
+                SELECT canonical_category FROM category_map WHERE raw_category = ?
+            )
         ),
         peers_p AS (
             SELECT p.fund_id, pr.asof_date
