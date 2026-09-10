@@ -29,7 +29,7 @@ import duckdb
 
 # --- paste from preflight.py, then verify every line -------------------------
 CONFIG = {
-    "SRC_DB": "test_fund.duckdb",
+    "SRC_DB": "mf_nav_full.duckdb",
     "NAV_TABLE": "nav",
     "META_TABLE": "scheme",
     "DATE_COL": "nav_date",

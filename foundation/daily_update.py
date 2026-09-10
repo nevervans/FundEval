@@ -17,6 +17,13 @@ Two problems this solves:
    wrong (a failed fetch, or data older than the tolerance). Silence means
    it's working; a notification means look at backfill.log.
 
+3. (2026-09-10) mf_nav_full.duckdb being fresh didn't mean the app showed
+   fresh NAVs -- fundeval_analysis.duckdb is a separate derived DB and
+   nothing rebuilt it automatically. Fix: rebuild_regular_analysis() below
+   chains the full rebuild sequence after every raw refresh, and writes a
+   lock file for the duration so streamlit_app.py's freshness check can
+   tell a rebuild is already running and not trigger a second one.
+
 Usage
 -----
     python3 daily_update.py --db mf_nav_full.duckdb
@@ -27,13 +34,17 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import os
 import subprocess
 import sys
+import time
 
 import amfi_backfill
 import nav_store
 
 STALE_THRESHOLD_DAYS = 3
+REGULAR_ANALYSIS_DB = "fundeval_analysis.duckdb"
+LOCK_PATH = "daily_update.lock"
 
 
 def notify(title: str, message: str) -> None:
@@ -81,6 +92,60 @@ def run(db_path: str, backfill_fn=None, notify_fn=notify) -> int:
         print(f"OK: {staleness} days behind, within tolerance")
 
     return 0
+
+
+def rebuild_regular_analysis(src_db: str, out_db: str, notify_fn=notify) -> int:
+    """Full rebuild chain for the Regular-plan derived analysis DB, mirroring
+    the manual sequence confirmed working on 2026-09-10.
+
+    NOT wired up yet for fundeval_analysis_direct.duckdb -- that DB is
+    currently intact and its rebuild scoping (--start-fy) hasn't been
+    confirmed, so Direct-plan rebuilds stay manual for now.
+
+    Stops (without a crash) and notifies if a genuinely new, unreviewed
+    data anomaly turns up -- publishing an unverified correction
+    automatically is worse than a day of stale data.
+
+    Writes LOCK_PATH for the duration so a caller (e.g. streamlit_app.py)
+    can detect a rebuild already in progress and avoid starting a second
+    one concurrently. Removed in `finally` so both success and failure
+    clean it up -- a lock surviving after this function returns means the
+    process was killed (SIGTERM, crash), and callers should treat a lock
+    older than some max age as stale rather than trusting it forever.
+    """
+    with open(LOCK_PATH, "w") as f:
+        f.write(str(time.time()))
+
+    try:
+        steps = [
+            ["python3", "analysis/returns_panel.py", "--plan", "REGULAR",
+             "--src", src_db, "--out", out_db],
+            ["python3", "analysis/rebase_classifier.py", "--out", out_db],
+            ["python3", "analysis/apply_nav_corrections.py", "--out", out_db],
+            ["python3", "analysis/exclude_bad_rows.py", "--out", out_db],
+            ["python3", "analysis/returns_panel.py", "--panel-only", "--out", out_db],
+            ["python3", "analysis/build_category_map.py", "--out", out_db],
+        ]
+        for cmd in steps:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            print(result.stdout)
+            if result.returncode == 2:
+                notify_fn("FundEval: new fund needs review",
+                           f"{cmd[1]} flagged an unreviewed jump -- check nightly_rebuild.log")
+                print("REVIEW NEEDED -- stopping before panel rebuild, "
+                      "so an unverified correction never gets published")
+                return 2
+            if result.returncode != 0:
+                notify_fn("FundEval rebuild failed",
+                           f"{cmd[1]} failed -- check nightly_rebuild.log")
+                print(result.stderr)
+                return 1
+        return 0
+    finally:
+        try:
+            os.remove(LOCK_PATH)
+        except FileNotFoundError:
+            pass
 
 
 def _selftest() -> int:
@@ -156,11 +221,21 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=nav_store.DB_DEFAULT)
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--skip-derived-rebuild", action="store_true",
+                     help="only refresh mf_nav_full.duckdb, skip rebuilding fundeval_analysis.duckdb")
     a = ap.parse_args()
 
     if a.selftest:
         return _selftest()
-    return run(a.db)
+
+    rc = run(a.db)
+    if rc != 0:
+        return rc  # raw refresh itself failed -- don't rebuild derived DB on bad data
+
+    if a.skip_derived_rebuild:
+        return 0
+
+    return rebuild_regular_analysis(a.db, REGULAR_ANALYSIS_DB)
 
 
 if __name__ == "__main__":

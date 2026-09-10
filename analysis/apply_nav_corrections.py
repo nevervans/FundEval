@@ -116,6 +116,14 @@ def main():
         """).df()
         print(check.to_string(index=False))
 
+    existing_tables = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
+    if "nav_fund_raw_precorrection" in existing_tables:
+        raise SystemExit(
+            "nav_fund_raw_precorrection already exists -- refusing to proceed. "
+            "This is almost always a leftover backup from an earlier interrupted run. "
+            "Inspect it (row count vs today's nav_fund), then drop or rename it before re-running this script."
+        )
+
     con.execute("ALTER TABLE nav_fund RENAME TO nav_fund_raw_precorrection")
     con.execute("ALTER TABLE nav_fund_corrected RENAME TO nav_fund")
     print("\nnav_fund overwritten with corrected values.")

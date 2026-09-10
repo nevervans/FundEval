@@ -42,13 +42,31 @@ trivial = cls[
     & (cls["log10_ratio"].abs() <= 0.5)
 ].copy()
 
+# Pre-approved single-row corrections: (fund_id -> bad date to delete).
+# These are confirmed via manual trajectory inspection to be a bad print on
+# the PRECEDING day, not the flagged jump date itself -- see comment above.
+# Add to this dict only after confirming with inspect_full_trajectory.py.
+KNOWN_SAFE_CORRECTIONS = {
+    "INF090I01817": {"bad_date": pd.Timestamp("2006-07-04"),
+                      "note": "single bad AMFI print, confirmed 2026-09-10"},
+}
+
 unmatched = trivial[~trivial["fund_id"].isin(revert["fund_id"])]
 print(f"\n{len(trivial)} 'round x1' rows found; "
       f"{len(trivial) - len(unmatched)} share a fund_id with a REVERT row above (will self-resolve).")
-if len(unmatched):
-    print(f"{len(unmatched)} have NO matching REVERT row -- check these individually "
-          f"with inspect_full_trajectory.py before assuming anything, do not auto-fix:")
-    print(unmatched[["fund_id", "date", "ratio_immediate", "scheme_name"]].to_string(index=False))
+
+known_safe_rows = unmatched[unmatched["fund_id"].isin(KNOWN_SAFE_CORRECTIONS)]
+still_unmatched = unmatched[~unmatched["fund_id"].isin(KNOWN_SAFE_CORRECTIONS)]
+
+if len(known_safe_rows):
+    print(f"{len(known_safe_rows)} match a pre-approved known-safe correction -- will auto-apply:")
+    print(known_safe_rows[["fund_id", "date", "ratio_immediate", "scheme_name"]].to_string(index=False))
+
+if len(still_unmatched):
+    print(f"{len(still_unmatched)} have NO matching REVERT row and are NOT pre-approved -- "
+          f"check these individually with inspect_full_trajectory.py before assuming anything, "
+          f"do not auto-fix:")
+    print(still_unmatched[["fund_id", "date", "ratio_immediate", "scheme_name"]].to_string(index=False))
 
 if args.dry_run:
     print("\n--dry-run: stopping before deleting anything")
@@ -61,7 +79,20 @@ con.execute("""
     DELETE FROM nav_fund
     WHERE (fund_id, d) IN (SELECT fund_id, date FROM to_delete)
 """)
+for fund_id, info in KNOWN_SAFE_CORRECTIONS.items():
+    if fund_id in known_safe_rows["fund_id"].values:
+        con.execute(
+            "DELETE FROM nav_fund WHERE fund_id = ? AND d = ?",
+            [fund_id, info["bad_date"].date()],
+        )
+        print(f"applied known-safe correction: deleted {fund_id} on {info['bad_date'].date()} ({info['note']})")
 after = con.execute("SELECT count(*) FROM nav_fund").fetchone()[0]
 print(f"\nnav_fund: {before:,} -> {after:,} rows ({before - after} deleted)")
 print(f"\nNext: python3 returns_panel.py --panel-only --out {args.out}")
 con.close()
+
+if len(still_unmatched):
+    print(f"\nEXIT 2: {len(still_unmatched)} row(s) still need manual trajectory review "
+          f"(see list above). Not treated as a hard failure, but data should not be "
+          f"trusted until reviewed.")
+    raise SystemExit(2)

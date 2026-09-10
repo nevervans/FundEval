@@ -1,0 +1,4 @@
+# One fund per line -- ISIN (e.g. INF090I01239) or a scheme-name
+# substring (e.g. "hdfc flexi cap"). Lines starting with # are ignored.
+Axis Large Cap Fund - Direct Plan - Growth
+BAJAJ FINSERV LARGE CAP FUND - DIRECT PLAN - GROWTH
