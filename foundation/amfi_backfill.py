@@ -12,8 +12,12 @@ Sample real row:
 
 Note Plan/Option columns are frequently blank in older data even though the
 NAV Name free-text contains "Direct"/"Growth" etc. -- plan/option are derived
-from the name via nav_store's classify_plan/classify_option, with the report's
-own columns used only as a fallback when non-blank.
+from the name via nav_store's classify_plan/classify_option first; when the
+name is ambiguous, the report's own Plan/Option columns are used as a
+fallback, but ALSO run through the same classifiers (2026-09-11 fix) --
+AMFI ships those columns as free-text too ("Direct Plan", "Dividend"), not
+a normalized enum, so trusting them verbatim reintroduces exactly the kind
+of fragmentation the classifiers exist to prevent.
 
 One call returns EVERY scheme, every trading day, in the window -- so this
 single walk populates all three of: scheme metadata (with real ISINs, which
@@ -86,14 +90,32 @@ def parse_report(text: str):
         # Report's own Plan/Option columns are often blank in older data;
         # the free-text name is the reliable signal, confirmed against
         # real rows during development.
+        #
+        # (2026-09-11) BUGFIX: when the name itself is ambiguous, this used
+        # to fall back to the report's raw Plan/Option column TEXT verbatim
+        # (e.g. literal "Direct Plan" / "Regular Plan" / "Dividend") instead
+        # of normalizing it. Confirmed real incident: 1,127 scheme rows in
+        # mf_nav_full.duckdb carried plan values 'Regular Plan' and
+        # 'Direct Plan' as distinct strings alongside the normalized
+        # 'REGULAR'/'DIRECT' -- invisible to every returns_panel.py query,
+        # since `WHERE plan = 'REGULAR'` is an exact match. Fix: run the
+        # raw fallback through the SAME classifier as the name, so any
+        # spelling AMFI ships -- "Direct Plan", "DIRECT", "Dividend", "IDCW"
+        # -- always collapses to one of DIRECT/REGULAR/UNKNOWN or
+        # GROWTH/IDCW/UNKNOWN. Never store the raw column text directly.
         derived_plan = nav_store.classify_plan(name)
+        if derived_plan == "UNKNOWN" and plan:
+            derived_plan = nav_store.classify_plan(plan)
+
         derived_option = nav_store.classify_option(name)
+        if derived_option == "UNKNOWN" and option:
+            derived_option = nav_store.classify_option(option)
 
         yield dict(
             code=int(code),
             name=name,
-            plan=derived_plan if derived_plan != "UNKNOWN" else (plan or "UNKNOWN"),
-            option=derived_option if derived_option != "UNKNOWN" else (option or "UNKNOWN"),
+            plan=derived_plan,
+            option=derived_option,
             isin_growth=None if isin_growth in ("", "-") else isin_growth,
             isin_div=None if isin_div in ("", "-") else isin_div,
             nav=nav,
@@ -296,6 +318,27 @@ def _selftest() -> int:
     dash_rows = list(parse_report(dash_sample))
     check("dash placeholder ISIN becomes None, not literal '-'",
           dash_rows[0]["isin_growth"] is None and dash_rows[0]["isin_div"] is None)
+
+    # regression test (2026-09-11): when the NAV Name gives no plan/option
+    # signal, the report's own raw Plan/Option columns must be run through
+    # the SAME classifier as the name, never stored as literal AMFI text.
+    # Confirmed real incident: 1,127 live rows carried plan='Regular Plan'/
+    # 'Direct Plan' as distinct strings from 'REGULAR'/'DIRECT', invisible
+    # to every exact-match `WHERE plan = 'REGULAR'` query in the codebase.
+    raw_fallback_sample = (
+        "Ambiguous Fund House\n"
+        "Scheme Code;NAV Name;Plan;Option;ISIN Div Payout/ISIN Growth;"
+        "ISIN Div Reinvestment;Net Asset Value;Date\n"
+        "888777;Ambiguous Multi-Category Fund;Direct Plan;Dividend;INF000A00000;;50.00;01-Jan-2020\n"
+    )
+    fallback_rows = list(parse_report(raw_fallback_sample))
+    check("name gives no plan signal -- raw 'Direct Plan' fallback normalizes to DIRECT",
+          fallback_rows[0]["plan"] == "DIRECT")
+    check("name gives no option signal -- raw 'Dividend' fallback normalizes to IDCW",
+          fallback_rows[0]["option"] == "IDCW")
+    check("raw fallback never stores literal AMFI text",
+          fallback_rows[0]["plan"] not in ("Direct Plan", "Regular Plan") and
+          fallback_rows[0]["option"] not in ("Dividend", "Growth"))
 
     check("windows split at 90 days",
           list(date_windows(dt.date(2020, 1, 1), dt.date(2020, 4, 30)))[0][1]

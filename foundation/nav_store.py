@@ -211,6 +211,34 @@ def bulk_upsert_schemes(con, metas: Sequence[SchemeMeta]) -> None:
     565,000-row nav upsert in under a second: DuckDB's own vectorized engine
     handles the conflict resolution instead of the Python driver looping
     row-by-row under the hood of what looks like a single call.
+
+    (2026-09-11) NEVER LET A WRITE ERASE ENRICHMENT DATA IT DIDN'T BRING.
+    Confirmed real incident: the daily incremental feed (amfi_backfill.py,
+    via DownloadNAVHistoryReport_Po.aspx) does not carry category -- only
+    category_backfill.py's separate NAVAll.txt-based pass does. Before this
+    fix, `category = excluded.category` was unconditional, so every single
+    incremental run silently nulled out categories that category_backfill.py
+    had correctly populated. Diagnosed 2026-09-11: raw store showed only
+    999/10,001 REGULAR-plan rows categorized, versus ~2,674 confirmed right
+    after a from-scratch category_backfill.py --include-non-canonical run
+    two days earlier -- the gap is this bug erasing that fix, run by run.
+
+    Fix: enrichment fields (fund_house, scheme_type, category, isin_growth,
+    isin_div) use COALESCE(excluded.X, scheme.X) -- an incoming NULL never
+    overwrites an existing real value, but a genuine correction (non-NULL
+    replacing non-NULL, e.g. a real re-categorization) still applies fine.
+
+    plan/option get the equivalent treatment for their own "empty" sentinel:
+    they're computed by classify_plan()/classify_option() from scheme_name
+    and default to "UNKNOWN" rather than SQL NULL, so COALESCE alone
+    wouldn't protect them -- a differently-formatted name from some source
+    could still downgrade an already-correct REGULAR/GROWTH classification
+    to UNKNOWN on a later write. Guarded the same way: incoming "UNKNOWN"
+    never overwrites an existing non-UNKNOWN value.
+
+    scheme_name and source are still overwritten unconditionally -- a scheme
+    can legitimately be renamed, and source should always reflect the most
+    recent write, not stick to whichever source happened to write first.
     """
     if not metas:
         return
@@ -232,13 +260,17 @@ def bulk_upsert_schemes(con, metas: Sequence[SchemeMeta]) -> None:
             FROM _bulk_scheme_staging
             ON CONFLICT (amfi_code) DO UPDATE SET
                 scheme_name = excluded.scheme_name,
-                fund_house  = excluded.fund_house,
-                scheme_type = excluded.scheme_type,
-                category    = excluded.category,
-                plan        = excluded.plan,
-                option      = excluded.option,
-                isin_growth = excluded.isin_growth,
-                isin_div    = excluded.isin_div,
+                fund_house  = COALESCE(excluded.fund_house, scheme.fund_house),
+                scheme_type = COALESCE(excluded.scheme_type, scheme.scheme_type),
+                category    = COALESCE(excluded.category, scheme.category),
+                plan        = CASE WHEN excluded.plan = 'UNKNOWN'
+                                     AND scheme.plan <> 'UNKNOWN'
+                                   THEN scheme.plan ELSE excluded.plan END,
+                option      = CASE WHEN excluded.option = 'UNKNOWN'
+                                     AND scheme.option <> 'UNKNOWN'
+                                   THEN scheme.option ELSE excluded.option END,
+                isin_growth = COALESCE(excluded.isin_growth, scheme.isin_growth),
+                isin_div    = COALESCE(excluded.isin_div, scheme.isin_div),
                 source      = excluded.source,
                 updated_at  = excluded.updated_at
             """
@@ -598,6 +630,66 @@ def _selftest() -> int:
     upsert_scheme(con, meta2)
     check("rename does not duplicate",
           con.execute("SELECT count(*) FROM scheme").fetchone()[0] == 1)
+    check("rename actually applied",
+          con.execute("SELECT scheme_name FROM scheme WHERE amfi_code=125497"
+                      ).fetchone()[0] == "SBI Small Cap Fund - Direct Growth")
+
+    # --- regression: 2026-09-11 category/plan/option erosion bug -----------
+    # Confirmed real incident: a source lacking category (e.g. the daily
+    # incremental feed) was nulling out categories that a prior, richer
+    # source (category_backfill.py) had correctly populated. Same failure
+    # mode risked plan/option via the "UNKNOWN" sentinel.
+    con.execute("INSERT INTO scheme (amfi_code, scheme_name, fund_house, "
+                "scheme_type, category, plan, option, isin_growth, isin_div) "
+                "VALUES (300001, 'Rich Fund - Regular Plan - Growth', "
+                "'Rich AMC', 'Open Ended', 'Equity Scheme - Flexi Cap Fund', "
+                "'REGULAR', 'GROWTH', 'INFRICH0001', NULL)")
+
+    # An incremental-style write for the same code, carrying nothing but
+    # name/plan/option -- exactly what a NAV-history-only source would send.
+    thin_update = SchemeMeta(
+        amfi_code=300001,
+        scheme_name="Rich Fund - Regular Plan - Growth",
+        fund_house=None, scheme_type=None, category=None,
+        isin_growth=None, isin_div=None,
+        plan="REGULAR", option="GROWTH", source="amfi",
+    )
+    upsert_scheme(con, thin_update)
+    row = con.execute(
+        "SELECT fund_house, scheme_type, category, isin_growth, plan, option "
+        "FROM scheme WHERE amfi_code = 300001"
+    ).fetchone()
+    check("thin update preserves fund_house", row[0] == "Rich AMC")
+    check("thin update preserves scheme_type", row[1] == "Open Ended")
+    check("thin update preserves category (the actual reported bug)",
+          row[2] == "Equity Scheme - Flexi Cap Fund")
+    check("thin update preserves isin_growth", row[3] == "INFRICH0001")
+    check("thin update preserves plan", row[4] == "REGULAR")
+    check("thin update preserves option", row[5] == "GROWTH")
+
+    # A write that would classify as UNKNOWN (e.g. a name format the
+    # classifier doesn't recognise) must NOT downgrade a known plan/option.
+    unknown_update = SchemeMeta(
+        amfi_code=300001, scheme_name="Rich Fund - some other format",
+        plan="UNKNOWN", option="UNKNOWN", source="amfi",
+    )
+    upsert_scheme(con, unknown_update)
+    row2 = con.execute(
+        "SELECT plan, option FROM scheme WHERE amfi_code = 300001"
+    ).fetchone()
+    check("UNKNOWN write does not downgrade known plan", row2[0] == "REGULAR")
+    check("UNKNOWN write does not downgrade known option", row2[1] == "GROWTH")
+
+    # A genuine correction (non-null replacing non-null) must still apply --
+    # this fix must not freeze data forever, only protect against erasure.
+    real_correction = SchemeMeta(
+        amfi_code=300001, scheme_name="Rich Fund - Regular Plan - Growth",
+        category="Equity Scheme - Large Cap Fund", plan="REGULAR", option="GROWTH",
+    )
+    upsert_scheme(con, real_correction)
+    check("genuine non-null correction still applies",
+          con.execute("SELECT category FROM scheme WHERE amfi_code=300001"
+                      ).fetchone()[0] == "Equity Scheme - Large Cap Fund")
 
     # universe snapshots
     record_universe(con, dt.date(2026, 8, 25), [125497, 999999])
@@ -623,7 +715,7 @@ def _selftest() -> int:
           con.execute("SELECT count(*) FROM refresh_log").fetchone()[0] == 1)
 
     cov = coverage(con)
-    check("coverage counts", cov["schemes"] == 2 and cov["nav_rows"] == 3)
+    check("coverage counts", cov["schemes"] == 3 and cov["nav_rows"] == 3)
 
     # isin_group conflict resolution: replicates the real DWS -> DHFL
     # Pramerica Hybrid Fixed Term Fund Series 9 case (2026-08-30) -- a

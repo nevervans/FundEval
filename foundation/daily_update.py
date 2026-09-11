@@ -19,10 +19,16 @@ Two problems this solves:
 
 3. (2026-09-10) mf_nav_full.duckdb being fresh didn't mean the app showed
    fresh NAVs -- fundeval_analysis.duckdb is a separate derived DB and
-   nothing rebuilt it automatically. Fix: rebuild_regular_analysis() below
-   chains the full rebuild sequence after every raw refresh, and writes a
-   lock file for the duration so streamlit_app.py's freshness check can
-   tell a rebuild is already running and not trigger a second one.
+   nothing rebuilt it automatically. Fix: rebuild chain below chains the
+   full rebuild sequence after every raw refresh, and writes a lock file
+   for the duration so streamlit_app.py's freshness check can tell a
+   rebuild is already running and not trigger a second one.
+
+4. (2026-09-11) Direct-plan derived DB (fundeval_analysis_direct.duckdb)
+   was left out of the above -- confirmed working command from the
+   2026-09-09 manual build (comprehensive, no --start-fy override needed)
+   is now wired into the same chain, under the same lock, so both DBs
+   stay current together instead of Direct silently lagging.
 
 Usage
 -----
@@ -44,6 +50,7 @@ import nav_store
 
 STALE_THRESHOLD_DAYS = 3
 REGULAR_ANALYSIS_DB = "fundeval_analysis.duckdb"
+DIRECT_ANALYSIS_DB = "fundeval_analysis_direct.duckdb"
 LOCK_PATH = "daily_update.lock"
 
 
@@ -94,53 +101,60 @@ def run(db_path: str, backfill_fn=None, notify_fn=notify) -> int:
     return 0
 
 
-def rebuild_regular_analysis(src_db: str, out_db: str, notify_fn=notify) -> int:
-    """Full rebuild chain for the Regular-plan derived analysis DB, mirroring
-    the manual sequence confirmed working on 2026-09-10.
-
-    NOT wired up yet for fundeval_analysis_direct.duckdb -- that DB is
-    currently intact and its rebuild scoping (--start-fy) hasn't been
-    confirmed, so Direct-plan rebuilds stay manual for now.
+def _rebuild_plan(plan: str, src_db: str, out_db: str, notify_fn=notify) -> int:
+    """One plan's full rebuild chain -- shared by both Regular and Direct.
+    Confirmed working for REGULAR on 2026-09-10 and for DIRECT (comprehensive
+    run, no --start-fy override needed) on 2026-09-09.
 
     Stops (without a crash) and notifies if a genuinely new, unreviewed
     data anomaly turns up -- publishing an unverified correction
     automatically is worse than a day of stale data.
+    """
+    steps = [
+        ["python3", "analysis/returns_panel.py", "--plan", plan,
+         "--src", src_db, "--out", out_db],
+        ["python3", "analysis/rebase_classifier.py", "--out", out_db],
+        ["python3", "analysis/apply_nav_corrections.py", "--out", out_db],
+        ["python3", "analysis/exclude_bad_rows.py", "--out", out_db],
+        ["python3", "analysis/returns_panel.py", "--panel-only", "--out", out_db],
+        ["python3", "analysis/build_category_map.py", "--out", out_db],
+    ]
+    for cmd in steps:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        print(result.stdout)
+        if result.returncode == 2:
+            notify_fn("FundEval: new fund needs review",
+                       f"{plan}: {cmd[1]} flagged an unreviewed jump -- check nightly_rebuild.log")
+            print(f"REVIEW NEEDED ({plan}) -- stopping before panel rebuild, "
+                  "so an unverified correction never gets published")
+            return 2
+        if result.returncode != 0:
+            notify_fn("FundEval rebuild failed",
+                       f"{plan}: {cmd[1]} failed -- check nightly_rebuild.log")
+            print(result.stderr)
+            return 1
+    return 0
 
-    Writes LOCK_PATH for the duration so a caller (e.g. streamlit_app.py)
-    can detect a rebuild already in progress and avoid starting a second
-    one concurrently. Removed in `finally` so both success and failure
-    clean it up -- a lock surviving after this function returns means the
-    process was killed (SIGTERM, crash), and callers should treat a lock
-    older than some max age as stale rather than trusting it forever.
+
+def rebuild_all_derived_analysis(src_db: str, notify_fn=notify) -> int:
+    """Rebuilds both derived analysis DBs (Regular and Direct plan) under
+    one shared lock file, so streamlit_app.py's staleness check sees a
+    single "rebuild in progress" window covering both -- not two separate
+    lock/unlock cycles with a gap between them where a concurrent trigger
+    could sneak in.
+
+    Runs both chains even if one needs review or fails -- they're
+    independent databases with independent pipelines, so a genuine
+    problem in one shouldn't stall a fix that's ready to ship for the
+    other. Returns the more severe of the two exit codes (2 > 1 > 0).
     """
     with open(LOCK_PATH, "w") as f:
         f.write(str(time.time()))
 
     try:
-        steps = [
-            ["python3", "analysis/returns_panel.py", "--plan", "REGULAR",
-             "--src", src_db, "--out", out_db],
-            ["python3", "analysis/rebase_classifier.py", "--out", out_db],
-            ["python3", "analysis/apply_nav_corrections.py", "--out", out_db],
-            ["python3", "analysis/exclude_bad_rows.py", "--out", out_db],
-            ["python3", "analysis/returns_panel.py", "--panel-only", "--out", out_db],
-            ["python3", "analysis/build_category_map.py", "--out", out_db],
-        ]
-        for cmd in steps:
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            print(result.stdout)
-            if result.returncode == 2:
-                notify_fn("FundEval: new fund needs review",
-                           f"{cmd[1]} flagged an unreviewed jump -- check nightly_rebuild.log")
-                print("REVIEW NEEDED -- stopping before panel rebuild, "
-                      "so an unverified correction never gets published")
-                return 2
-            if result.returncode != 0:
-                notify_fn("FundEval rebuild failed",
-                           f"{cmd[1]} failed -- check nightly_rebuild.log")
-                print(result.stderr)
-                return 1
-        return 0
+        rc_regular = _rebuild_plan("REGULAR", src_db, REGULAR_ANALYSIS_DB, notify_fn)
+        rc_direct = _rebuild_plan("DIRECT", src_db, DIRECT_ANALYSIS_DB, notify_fn)
+        return max(rc_regular, rc_direct)
     finally:
         try:
             os.remove(LOCK_PATH)
@@ -222,7 +236,8 @@ def main() -> int:
     ap.add_argument("--db", default=nav_store.DB_DEFAULT)
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--skip-derived-rebuild", action="store_true",
-                     help="only refresh mf_nav_full.duckdb, skip rebuilding fundeval_analysis.duckdb")
+                     help="only refresh mf_nav_full.duckdb, skip rebuilding both "
+                          "fundeval_analysis.duckdb and fundeval_analysis_direct.duckdb")
     a = ap.parse_args()
 
     if a.selftest:
@@ -230,12 +245,12 @@ def main() -> int:
 
     rc = run(a.db)
     if rc != 0:
-        return rc  # raw refresh itself failed -- don't rebuild derived DB on bad data
+        return rc  # raw refresh itself failed -- don't rebuild derived DBs on bad data
 
     if a.skip_derived_rebuild:
         return 0
 
-    return rebuild_regular_analysis(a.db, REGULAR_ANALYSIS_DB)
+    return rebuild_all_derived_analysis(a.db)
 
 
 if __name__ == "__main__":
