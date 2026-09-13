@@ -8,15 +8,21 @@ unit-tested there (tools/test_windows.py) -- this file only handles
 search UX, layout, and charts. No new analytical logic is implemented
 here; if a number looks wrong, the bug is in windows.py, not this file.
 
-Run (Codespace Terminal, from repo root):
+Run locally (Codespace/Mac/Lenovo terminal, from repo root):
     pip install streamlit
     streamlit run streamlit_app.py
 
 Requires fundeval_analysis.duckdb and/or fundeval_analysis_direct.duckdb
-to be present in the repo root (same as the CLI tools).
+to be present in the repo root (same as the CLI tools) -- OR, on the
+hosted Streamlit Community Cloud deployment, R2 credentials configured
+in st.secrets under an [r2] table, in which case this file pulls both
+files down automatically (see "R2 data sync" section below). Locally,
+with no [r2] secrets configured, that section is a no-op and this file
+behaves exactly as it always has.
 """
 
 import datetime as dt
+import json
 import os
 import subprocess
 import sys
@@ -51,15 +57,106 @@ DB_OPTIONS = {
     "Direct plan": "fundeval_analysis_direct.duckdb",
 }
 
-# (2026-09-10) Only the Regular-plan DB gets an automated rebuild chain --
-# see daily_update.py's rebuild_regular_analysis(), which explicitly does
-# NOT cover fundeval_analysis_direct.duckdb yet. Direct-plan staleness
-# still needs a manual rebuild; this check silently skips it rather than
-# implying an automated fix is coming when someone selects it.
+# (2026-09-10) Only the Regular-plan DB gets an automated LOCAL rebuild
+# trigger from this file -- see maybe_trigger_background_refresh(), which
+# explicitly does NOT cover fundeval_analysis_direct.duckdb yet. Direct-plan
+# staleness in a purely local run still needs a manual rebuild; this check
+# silently skips it rather than implying an automated fix is coming when
+# someone selects it. (On the hosted deployment this whole local-trigger
+# path is skipped anyway -- see the R2 note on that function.)
 REGULAR_DB_PATH = DB_OPTIONS["Regular plan"]
 LOCK_PATH = "daily_update.lock"
 STALE_TRIGGER_DAYS = 1
 LOCK_MAX_AGE_SECONDS = 60 * 60  # safety net only -- daily_update.py removes its own lock on exit
+
+
+# ------------------------------------------------------------ R2 data sync
+
+R2_BUCKET = "fundeval"
+R2_VERSION_FILE = ".r2_versions.json"
+
+
+def _r2_secrets():
+    """Returns the [r2] secrets table, or None if this deployment has none
+    configured. On Mac/Lenovo/Codespace (where the two .duckdb files are
+    already present via manual transfer) no R2 secrets are ever set, so
+    every function in this section no-ops and the app behaves exactly as
+    it did before R2 existed. Only the hosted Streamlit Community Cloud
+    deployment has these configured, in the app's Settings -> Secrets.
+    """
+    try:
+        return st.secrets["r2"]
+    except (KeyError, FileNotFoundError, AttributeError):
+        return None
+
+
+def _r2_client():
+    secrets = _r2_secrets()
+    if secrets is None:
+        return None
+    import boto3  # imported lazily -- only the hosted deployment's
+                  # requirements.txt is guaranteed to have this installed;
+                  # local dev envs shouldn't need it just to run the app
+    return boto3.client(
+        "s3",
+        endpoint_url=secrets["endpoint"],
+        aws_access_key_id=secrets["access_key"],
+        aws_secret_access_key=secrets["secret_key"],
+    )
+
+
+def sync_dbs_from_r2() -> list[str]:
+    """Pulls fresh copies of the derived DBs from Cloudflare R2 when
+    needed, on the hosted deployment only (see _r2_secrets).
+
+    "Needed" means: the file is missing locally (first boot of a hosted
+    container), or R2's copy has a different ETag than the one this
+    container downloaded last time (daily_update.py pushed a newer rebuild
+    since we last checked). A plain existence check on its own isn't
+    enough -- the hosted container can stay warm across many user
+    sessions for a long time between AMFI's nightly updates, so without
+    the ETag comparison it would keep serving day-old NAVs indefinitely
+    even after R2 has fresher data.
+
+    Returns the list of files that were actually re-downloaded, so the
+    caller knows whether to invalidate the DuckDB connection cache.
+    """
+    s3 = _r2_client()
+    if s3 is None:
+        return []  # no R2 configured here -- rely on local files, as before
+
+    local_versions = {}
+    if os.path.exists(R2_VERSION_FILE):
+        try:
+            with open(R2_VERSION_FILE) as f:
+                local_versions = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            local_versions = {}
+
+    changed = []
+    for db_file in DB_OPTIONS.values():
+        try:
+            remote_etag = s3.head_object(Bucket=R2_BUCKET, Key=db_file)["ETag"]
+        except Exception as e:
+            # Object not in R2 yet (e.g. Direct plan hasn't been pushed
+            # even once), or a transient network blip -- don't crash the
+            # whole app over one missing file, just keep whatever (if
+            # anything) is already local.
+            print(f"R2 check failed for {db_file}: {e}")
+            continue
+        if not os.path.exists(db_file) or local_versions.get(db_file) != remote_etag:
+            with st.spinner(f"Fetching latest {db_file} from cloud storage..."):
+                s3.download_file(R2_BUCKET, db_file, db_file)
+            local_versions[db_file] = remote_etag
+            changed.append(db_file)
+
+    try:
+        with open(R2_VERSION_FILE, "w") as f:
+            json.dump(local_versions, f)
+    except OSError:
+        pass
+
+    return changed
 
 
 # --------------------------------------------------------------- caching
@@ -127,18 +224,30 @@ def percentile_from_rank(rank, n_peers):
 
 
 def maybe_trigger_background_refresh(latest_date, db_path):
-    """Non-blocking freshness check for the Regular-plan DB only.
+    """Non-blocking freshness check for the Regular-plan DB only, on a
+    purely LOCAL run.
 
-    If NAVs look more than STALE_TRIGGER_DAYS old, this does NOT block the
-    page. It spawns daily_update.py as a detached background process --
-    whoever's viewing right now still gets an immediate answer, just with
-    today's (possibly stale) data -- and shows a banner. A second person
-    opening the app during that window won't trigger a second rebuild:
-    daily_update.py's own lock file (written/removed around its rebuild
-    chain) is checked first. LOCK_MAX_AGE_SECONDS is only a safety net for
-    a crashed prior run that never got to clean up its lock; a normal run
-    always removes it via `finally`, so this branch should rarely fire.
+    (2026-09-13) No-ops entirely on the hosted deployment (R2 secrets
+    configured) -- there, freshness comes from sync_dbs_from_r2() picking
+    up whatever Mac/Lenovo's cron last pushed, not from spawning a second,
+    redundant AMFI backfill inside the shared free-tier container. Trying
+    to run the real backfill there would also likely fail or get throttled
+    -- Community Cloud isn't meant to hold long-running scrape jobs.
+
+    On a local run: if NAVs look more than STALE_TRIGGER_DAYS old, this
+    does NOT block the page. It spawns daily_update.py as a detached
+    background process -- whoever's viewing right now still gets an
+    immediate answer, just with today's (possibly stale) data -- and shows
+    a banner. A second person opening the app during that window won't
+    trigger a second rebuild: daily_update.py's own lock file
+    (written/removed around its rebuild chain) is checked first.
+    LOCK_MAX_AGE_SECONDS is only a safety net for a crashed prior run that
+    never got to clean up its lock; a normal run always removes it via
+    `finally`, so this branch should rarely fire.
     """
+    if _r2_secrets() is not None:
+        return  # hosted deployment -- see docstring
+
     if db_path != REGULAR_DB_PATH:
         return  # Direct-plan rebuilds are manual for now -- see note above
 
@@ -203,12 +312,23 @@ def pick_fund(con, label, key_prefix):
 
 st.sidebar.title("FundEval")
 
+changed_dbs = sync_dbs_from_r2()
+if changed_dbs:
+    # A newer copy landed in R2 since this container last checked (or this
+    # is a fresh hosted container starting with nothing local) -- any
+    # cached connection or query result keyed off the old file content is
+    # now wrong, not just missing, so both cache types get cleared rather
+    # than trying to invalidate individual entries.
+    st.cache_resource.clear()
+    st.cache_data.clear()
+
 available_dbs = {label: path for label, path in DB_OPTIONS.items() if os.path.exists(path)}
 if not available_dbs:
     st.error(
         "No database found in the repo root. Expected fundeval_analysis.duckdb "
         "and/or fundeval_analysis_direct.duckdb -- run this from the repo root, "
-        "or sync the database into the Codespace first."
+        "sync the database into the Codespace first, or configure R2 secrets "
+        "for this deployment to pull them automatically."
     )
     st.stop()
 

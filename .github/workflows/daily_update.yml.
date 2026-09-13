@@ -1,0 +1,54 @@
+# .github/workflows/daily_update.yml
+#
+# Runs FundEval's update pipeline on GitHub's own servers, on a schedule --
+# no laptop involved at all. This replaces "cron on Mac + Task Scheduler on
+# Lenovo" as the thing actually keeping data fresh; Mac/Lenovo can still run
+# daily_update.py locally too (e.g. for local dev), just without
+# --sync-raw-db-with-r2, so they never pull/overwrite their local raw store
+# from R2.
+#
+# Schedule is every 6 hours, not every 2 -- that tighter interval on
+# Mac/Lenovo existed specifically to work around a laptop that might be
+# asleep at the exact cron moment. GitHub's runners don't sleep, and AMFI
+# only publishes new NAVs once a day, so 4x/day is comfortably enough
+# while staying well inside the 2,000 free Actions minutes/month on a
+# private repo (Free plan).
+
+name: FundEval daily update
+
+on:
+  schedule:
+    - cron: "0 0,6,12,18 * * *"   # UTC. GitHub may delay a scheduled run
+                                   # by up to ~15-60 min under load -- not
+                                   # a laptop-asleep-style miss, just not
+                                   # to-the-minute.
+  workflow_dispatch: {}            # lets you trigger a run manually from
+                                    # the Actions tab, e.g. to test this
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run daily update
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+          R2_BUCKET: fundeval
+        # --sync-raw-db-with-r2: pulls mf_nav_full.duckdb from R2 before
+        # running (this runner starts with nothing), then pushes it back
+        # after a successful update -- alongside the two derived DBs,
+        # which daily_update.py already pushes on its own after a
+        # successful rebuild. Never pass this flag on Mac/Lenovo.
+        run: python3 foundation/daily_update.py --sync-raw-db-with-r2 

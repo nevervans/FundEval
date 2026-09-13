@@ -18,11 +18,19 @@ Everything else is left alone on purpose:
   * INSUFFICIENT_FORWARD_DATA rows are left alone -- mostly segregated
     portfolios winding down, real by the same logic as above.
 
-Mechanics: for a confirmed event at (fund_id, date d) with factor
-r = exp(lr) (the exact single-step ratio from splice_jumps, not the smoothed
-classifier ratio), every NAV for that fund_id on or after d is divided by r.
-Multiple events for the same fund compose correctly because they're applied
-in date order and each only touches d and later.
+Zero confirmed events is a legitimate, expected outcome (not just for tiny
+scoped test universes) -- confirmed for real 2026-09-11 on the full Direct-
+plan universe, where every REBASE jump was genuinely non-round (segregated
+portfolios / credit events), unlike Regular's 15 real face-value splits.
+When that happens, nav_fund is already correct as-is: this exits early
+rather than building a correction join, because DuckDB cannot reliably
+infer a real SQL type for `fund_id` from a zero-row pandas column, and the
+resulting ASOF JOIN attempted an implicit cast of every VARCHAR fund_id
+(including non-ISIN "CODE:xxxxx" ids) into whatever numeric type it fell
+back to -- crashing with
+    Could not convert string 'CODE:148415' to INT32
+on the very first non-numeric fund_id it hit. Skipping the join when there
+is nothing to join is simpler and more correct than fighting that inference.
 
 This OVERWRITES nav_fund in --out (a derived table, not the raw foundation
 DB -- mf_nav_full.duckdb is never touched). Follow with:
@@ -66,6 +74,14 @@ def main():
     print(f"{len(confirmed)} confirmed round-multiplier events selected for correction")
     print(confirmed[["fund_id", "date", "adj_factor", "rebase_shape", "scheme_name"]]
           .sort_values("date").to_string(index=False)[:6000])
+
+    if len(confirmed) == 0:
+        print("\nNo confirmed round-multiplier events for this universe -- "
+              "nav_fund already reflects raw NAVs correctly, nothing to "
+              "rebase. Leaving nav_fund untouched (see module docstring, "
+              "2026-09-11 note, for why this exits here rather than "
+              "building an empty correction join).")
+        return
 
     if args.dry_run:
         print("\n--dry-run: stopping before writing anything")
