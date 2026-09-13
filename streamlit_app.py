@@ -97,11 +97,22 @@ def _r2_client():
     import boto3  # imported lazily -- only the hosted deployment's
                   # requirements.txt is guaranteed to have this installed;
                   # local dev envs shouldn't need it just to run the app
+    from botocore.config import Config
+    # (2026-09-13) botocore >=1.36 defaults to attaching integrity-checksum
+    # headers to every S3 request, which R2 doesn't handle the way AWS S3
+    # does -- surfaces as 403s on reads and SignatureDoesNotMatch on
+    # writes. Pinning both settings back to "when_required" (pre-2025
+    # behavior) fixes it. Same fix applied to daily_update.py after
+    # hitting this on the first real GitHub Actions run.
     return boto3.client(
         "s3",
         endpoint_url=secrets["endpoint"],
         aws_access_key_id=secrets["access_key"],
         aws_secret_access_key=secrets["secret_key"],
+        config=Config(
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
+        ),
     )
 
 

@@ -186,11 +186,23 @@ def _r2_client():
     import boto3  # imported lazily -- only needed on whichever machine(s)
                   # actually talk to R2, not a hard dependency for the rest
                   # of this script's local-only functionality
+    from botocore.config import Config
+    # (2026-09-13) botocore >=1.36 defaults to attaching integrity-checksum
+    # headers to every S3 request ("when_supported"). R2 doesn't handle
+    # those the way AWS S3 does, which surfaces as a 403 on reads and
+    # SignatureDoesNotMatch on writes -- not a credentials problem, a
+    # third-party-S3-compatibility one. Pinning both settings back to
+    # "when_required" (pre-2025 behavior) fixes it. Confirmed against the
+    # actual GitHub Actions failure on 2026-09-13.
     return boto3.client(
         "s3",
         endpoint_url=endpoint,
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
+        config=Config(
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
+        ),
     )
 
 
@@ -445,7 +457,23 @@ def main() -> int:
         return _selftest()
 
     if a.sync_raw_db_with_r2:
-        pull_raw_db_from_r2(a.db)
+        pulled = pull_raw_db_from_r2(a.db)
+        if not pulled:
+            # (2026-09-13) Discovered the hard way: without this check, a
+            # failed pull left main() running the backfill against a
+            # missing/blank local file, producing a DB with only the
+            # trailing ~90-day window -- which would then have been
+            # pushed back to R2, silently overwriting the real
+            # 2006-present archive with it. Continuing here is strictly
+            # worse than stopping, even though it means this run does
+            # nothing -- a skipped update is recoverable, a destroyed
+            # archive is not.
+            print("ABORTING: --sync-raw-db-with-r2 was set but the raw DB could not "
+                  "be pulled from R2 -- see the error above. Running anyway would "
+                  "mean backfilling into an empty file and risking pushing a "
+                  "90-day-only DB over the real archive. Fix the R2 connection and "
+                  "rerun; nothing has been changed.")
+            return 1
 
     rc = run(a.db)
     if rc != 0:
