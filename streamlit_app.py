@@ -483,11 +483,15 @@ with tab_browse:
                 f"({round(100 * meta['n_dead'] / meta['n_considered'], 1) if meta['n_considered'] else 0}% attrition)."
             )
 
-            chart_data = display[["Fund", "cagr"]].head(25).copy()
-            chart_data["Fund"] = chart_data["Fund"].fillna("unknown fund").astype(str).str.slice(0, 28)
-            st.bar_chart(chart_data.set_index("Fund")["cagr"], height=420)
-            if len(display) > 25:
-                st.caption(f"Chart shows the top 25 of {len(display)} funds by return -- full ranked list below.")
+            # (2026-09-14) Bar chart temporarily disabled -- values were
+            # coming out visibly wrong (Edelweiss Large Cap 10Y showing
+            # ~20-25% in the chart vs its correct 11.67% in the table
+            # below) and the root cause wasn't confirmed before a manager
+            # demo. The ranked table's numbers are independently verified
+            # against windows.py / test_windows.py, so it's the source of
+            # truth until the chart is debugged properly. Re-enable once
+            # fixed -- don't just re-comment this back in without
+            # confirming the underlying cagr values match the table again.
 
             st.dataframe(
                 display[["Rank", "Fund", "Return (CAGR)", "Vol (ann)", "Sharpe", "Max DD", "Percentile"]],
